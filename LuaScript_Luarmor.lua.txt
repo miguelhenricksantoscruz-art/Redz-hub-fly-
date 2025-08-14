@@ -1,0 +1,5 @@
+script_key = "593631d8c8c4c74eb29ad59b" 
+getgenv().Team = "Pirates"
+getgenv().FixCrash = true
+getgenv().FixCrash2 = true
+loadstring(game:HttpGet("https://api.luarmor.net/files/v3/loaders/85e904ae1ff30824c1aa007fc7324f8f.lua"))()
