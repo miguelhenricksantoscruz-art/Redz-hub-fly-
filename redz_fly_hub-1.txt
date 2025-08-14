@@ -1,0 +1,84 @@
+--[[
+    Redz Fly Hub (UI estilo Rayfield)
+    Fly + No Fog + Velocidade até 100
+    Feito para Xeno, Ronix, Delta
+]]
+
+-- No Fog
+local Lighting = game:GetService("Lighting")
+Lighting.FogEnd = 1e10
+Lighting.FogStart = 1e10
+for _, v in pairs(Lighting:GetChildren()) do
+    if v:IsA("Atmosphere") then
+        v:Destroy()
+    end
+end
+
+-- Variáveis Fly
+local player = game.Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local flying = false
+local speed = 3
+
+-- Rayfield UI
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Redz Hub | Fly",
+    LoadingTitle = "Carregando Redz Fly Hub...",
+    LoadingSubtitle = "By Real_Redz",
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = "RedzHub",
+        FileName = "FlyConfig"
+    },
+    Discord = {
+        Enabled = false
+    },
+    KeySystem = false
+})
+
+-- Aba Fly
+local FlyTab = Window:CreateTab("Fly", 4483362458)
+
+-- Botão Ativar/Desativar Fly
+FlyTab:CreateToggle({
+    Name = "Ativar Fly",
+    CurrentValue = false,
+    Flag = "FlyToggle",
+    Callback = function(state)
+        flying = state
+        if flying then
+            local bodyGyro = Instance.new("BodyGyro", player.Character.HumanoidRootPart)
+            bodyGyro.P = 9e4
+            bodyGyro.MaxTorque = Vector3.new(9e9,9e9,9e9)
+
+            local bodyVel = Instance.new("BodyVelocity", player.Character.HumanoidRootPart)
+            bodyVel.Velocity = Vector3.new(0,0,0)
+            bodyVel.MaxForce = Vector3.new(9e9,9e9,9e9)
+
+            game:GetService("RunService").RenderStepped:Connect(function()
+                if flying and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    bodyGyro.CFrame = camera.CFrame
+                    bodyVel.Velocity = camera.CFrame.LookVector * speed
+                else
+                    if bodyGyro then bodyGyro:Destroy() end
+                    if bodyVel then bodyVel:Destroy() end
+                end
+            end)
+        end
+    end
+})
+
+-- Slider Velocidade
+FlyTab:CreateSlider({
+    Name = "Velocidade do Fly",
+    Range = {1, 100},
+    Increment = 1,
+    Suffix = "studs/s",
+    CurrentValue = speed,
+    Flag = "FlySpeed",
+    Callback = function(value)
+        speed = value
+    end
+})
