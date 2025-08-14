@@ -1,0 +1,227 @@
+--[[
+    Redz Fly Hub — v4 (Estilo Infinite Yield, Estável)
+    • Fly estável: BodyGyro + BodyVelocity (para no ar; sem girar)
+    • Direção correta (frente/trás/lados) usando Humanoid.MoveDirection
+    • Subir/Descer: Space / Shift (PC) + toggles para Mobile
+    • Velocidade 1–500
+    • Noclip (toggle) e NoFog (toggle)
+    • UI: Rayfield (aba "Fly")
+]]
+
+--// Serviços
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local player = Players.LocalPlayer
+
+--// Referências de personagem
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local hrp = character:WaitForChild("HumanoidRootPart")
+
+--// Estado
+local flying = false
+local noclip = false
+local nofog = false
+local flySpeed = 100
+local ascendMobile = false
+local descendMobile = false
+
+--// Objetos de voo e conexões
+local bodyGyro, bodyVel
+local flyConn, noclipConn
+
+--// Helpers
+local function clearFlyForces()
+    if bodyGyro then bodyGyro:Destroy(); bodyGyro = nil end
+    if bodyVel then bodyVel:Destroy(); bodyVel = nil end
+end
+
+local function disconnectConn(c)
+    if c then c:Disconnect() end
+    return nil
+end
+
+--// NoFog
+local function setNoFog(state)
+    if state then
+        Lighting.FogEnd = 1e10
+        Lighting.FogStart = 1e10
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Atmosphere") then v:Destroy() end
+        end
+    else
+        -- Valores "seguros" padrão (ajuste se quiser outro)
+        Lighting.FogEnd = 1000
+        Lighting.FogStart = 0
+    end
+end
+
+--// Noclip (liga/desliga com conexão dedicada)
+local function setNoclip(state)
+    noclip = state
+    noclipConn = disconnectConn(noclipConn)
+    if noclip then
+        noclipConn = RunService.Stepped:Connect(function()
+            local char = player.Character
+            if not char then return end
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end)
+    end
+end
+
+--// Iniciar/Parar Fly
+local function startFly()
+    local char = player.Character
+    if not char then return end
+    humanoid = char:FindFirstChildOfClass("Humanoid") or humanoid
+    hrp = char:FindFirstChild("HumanoidRootPart") or hrp
+    if not humanoid or not hrp then return end
+
+    humanoid.PlatformStand = true
+
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.P = 9e4
+    bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+    bodyGyro.CFrame = hrp.CFrame
+    bodyGyro.Parent = hrp
+
+    bodyVel = Instance.new("BodyVelocity")
+    bodyVel.Velocity = Vector3.new(0, 0, 0)
+    bodyVel.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+    bodyVel.Parent = hrp
+
+    flyConn = disconnectConn(flyConn)
+    flyConn = RunService.RenderStepped:Connect(function()
+        if not flying then return end
+        if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return end
+
+        local cam = workspace.CurrentCamera
+        local moveDir = humanoid.MoveDirection -- já em espaço mundial (funciona com joystick e WASD)
+        local velocity = moveDir
+
+        -- Subir/Descer: teclado + toggles mobile
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space) or ascendMobile then
+            velocity = velocity + Vector3.new(0, 1, 0)
+        end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or descendMobile then
+            velocity = velocity + Vector3.new(0, -1, 0)
+        end
+
+        -- Travar a rotação para a direção da câmera (evita girar)
+        bodyGyro.CFrame = CFrame.new(hrp.Position, hrp.Position + cam.CFrame.LookVector)
+
+        if velocity.Magnitude > 0 then
+            bodyVel.Velocity = velocity.Unit * flySpeed
+        else
+            -- Ficar parado no ar
+            bodyVel.Velocity = Vector3.new(0, 0, 0)
+        end
+    end)
+end
+
+local function stopFly()
+    flying = false
+    if humanoid then humanoid.PlatformStand = false end
+    flyConn = disconnectConn(flyConn)
+    clearFlyForces()
+end
+
+local function setFly(state)
+    if state then
+        flying = true
+        startFly()
+    else
+        stopFly()
+    end
+end
+
+--// Reaplicar em respawn
+player.CharacterAdded:Connect(function(char)
+    character = char
+    humanoid = character:WaitForChild("Humanoid")
+    hrp = character:WaitForChild("HumanoidRootPart")
+    if flying then
+        stopFly()
+        task.wait()
+        setFly(true)
+    end
+    if noclip then
+        setNoclip(true)
+    end
+end)
+
+--// UI (Rayfield)
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Redz Fly Hub | v4",
+    LoadingTitle = "Redz Hub",
+    LoadingSubtitle = "by Redz",
+    ConfigurationSaving = {
+        Enabled = false,
+        FolderName = nil,
+        FileName = "RedzFlyHub"
+    },
+    KeySystem = false
+})
+
+local FlyTab = Window:CreateTab("Fly", 4483362458)
+
+FlyTab:CreateToggle({
+    Name = "Ativar Fly",
+    CurrentValue = false,
+    Callback = function(v)
+        setFly(v)
+    end
+})
+
+FlyTab:CreateSlider({
+    Name = "Velocidade",
+    Range = {1, 500},
+    Increment = 1,
+    CurrentValue = flySpeed,
+    Suffix = "u",
+    Callback = function(val)
+        flySpeed = val
+    end
+})
+
+FlyTab:CreateToggle({
+    Name = "Ativar Noclip",
+    CurrentValue = false,
+    Callback = function(v)
+        setNoclip(v)
+    end
+})
+
+FlyTab:CreateToggle({
+    Name = "Ativar NoFog",
+    CurrentValue = false,
+    Callback = function(v)
+        nofog = v
+        setNoFog(v)
+    end
+})
+
+-- Controles Mobile (verticais)
+FlyTab:CreateToggle({
+    Name = "Subir (Mobile)",
+    CurrentValue = false,
+    Callback = function(v)
+        ascendMobile = v
+    end
+})
+
+FlyTab:CreateToggle({
+    Name = "Descer (Mobile)",
+    CurrentValue = false,
+    Callback = function(v)
+        descendMobile = v
+    end
+})
