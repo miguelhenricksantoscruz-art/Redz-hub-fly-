@@ -1,0 +1,135 @@
+--[[
+    Redz Fly Hub Optimized - Xeno/Ronix/Delta Compatible
+    Fly controlável + No Fog + Interface Dark
+]]
+
+-- No Fog
+local Lighting = game:GetService("Lighting")
+Lighting.FogEnd = 1e10
+Lighting.FogStart = 1e10
+for _, v in pairs(Lighting:GetChildren()) do
+    if v:IsA("Atmosphere") then
+        v:Destroy()
+    end
+end
+
+-- Variáveis Fly
+local player = game.Players.LocalPlayer
+local camera = workspace.CurrentCamera
+local flying = false
+local speed = 3
+
+-- Criar GUI estilo Redz
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Parent = game.CoreGui
+ScreenGui.ResetOnSpawn = false
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 220, 0, 160)
+MainFrame.Position = UDim2.new(1, -240, 0.5, -80)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Visible = false
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner", MainFrame)
+UICorner.CornerRadius = UDim.new(0,8)
+
+local UIStroke = Instance.new("UIStroke", MainFrame)
+UIStroke.Color = Color3.fromRGB(255,0,100)
+UIStroke.Thickness = 1.5
+
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Size = UDim2.new(1,0,0,30)
+Title.BackgroundTransparency = 1
+Title.Text = "Redz Fly Hub"
+Title.TextColor3 = Color3.fromRGB(255,255,255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 16
+
+local FlyButton = Instance.new("TextButton", MainFrame)
+FlyButton.Size = UDim2.new(1, -20, 0, 40)
+FlyButton.Position = UDim2.new(0,10,0,40)
+FlyButton.BackgroundColor3 = Color3.fromRGB(50,50,50)
+FlyButton.TextColor3 = Color3.fromRGB(255,255,255)
+FlyButton.Font = Enum.Font.GothamBold
+FlyButton.TextSize = 16
+FlyButton.Text = "Ativar Fly"
+
+local UICorner2 = Instance.new("UICorner", FlyButton)
+UICorner2.CornerRadius = UDim.new(0,6)
+
+-- Slider Velocidade
+local SpeedLabel = Instance.new("TextLabel", MainFrame)
+SpeedLabel.Size = UDim2.new(1, -20, 0, 20)
+SpeedLabel.Position = UDim2.new(0, 10, 0, 90)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "Velocidade: "..speed
+SpeedLabel.TextColor3 = Color3.fromRGB(255,255,255)
+SpeedLabel.Font = Enum.Font.Gotham
+SpeedLabel.TextSize = 14
+
+local SpeedSlider = Instance.new("TextButton", MainFrame)
+SpeedSlider.Size = UDim2.new(1, -20, 0, 20)
+SpeedSlider.Position = UDim2.new(0, 10, 0, 110)
+SpeedSlider.BackgroundColor3 = Color3.fromRGB(50,50,50)
+SpeedSlider.Text = ""
+local UICorner3 = Instance.new("UICorner", SpeedSlider)
+UICorner3.CornerRadius = UDim.new(0,6)
+
+SpeedSlider.MouseButton1Down:Connect(function()
+    local mouse = player:GetMouse()
+    local connection
+    connection = mouse.Move:Connect(function()
+        local mouseX = math.clamp(mouse.X - SpeedSlider.AbsolutePosition.X, 0, SpeedSlider.AbsoluteSize.X)
+        speed = math.floor((mouseX / SpeedSlider.AbsoluteSize.X) * 20)
+        if speed < 1 then speed = 1 end
+        SpeedLabel.Text = "Velocidade: "..speed
+    end)
+    local release
+    release = mouse.Button1Up:Connect(function()
+        connection:Disconnect()
+        release:Disconnect()
+    end)
+end)
+
+-- Botão abrir/fechar
+local OpenButton = Instance.new("TextButton", ScreenGui)
+OpenButton.Size = UDim2.new(0,40,0,40)
+OpenButton.Position = UDim2.new(1,-50,0.5,-20)
+OpenButton.BackgroundColor3 = Color3.fromRGB(255,0,100)
+OpenButton.Text = "☰"
+OpenButton.TextColor3 = Color3.fromRGB(255,255,255)
+OpenButton.Font = Enum.Font.GothamBold
+OpenButton.TextSize = 20
+local UICorner4 = Instance.new("UICorner", OpenButton)
+UICorner4.CornerRadius = UDim.new(0,8)
+
+OpenButton.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+-- Fly Function
+local RunService = game:GetService("RunService")
+FlyButton.MouseButton1Click:Connect(function()
+    flying = not flying
+    FlyButton.Text = flying and "Desativar Fly" or "Ativar Fly"
+    if flying then
+        local bodyGyro = Instance.new("BodyGyro", player.Character.HumanoidRootPart)
+        bodyGyro.P = 9e4
+        bodyGyro.MaxTorque = Vector3.new(9e9,9e9,9e9)
+        local bodyVel = Instance.new("BodyVelocity", player.Character.HumanoidRootPart)
+        bodyVel.Velocity = Vector3.new(0,0,0)
+        bodyVel.MaxForce = Vector3.new(9e9,9e9,9e9)
+
+        RunService.RenderStepped:Connect(function()
+            if flying and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                bodyGyro.CFrame = camera.CFrame
+                bodyVel.Velocity = camera.CFrame.LookVector * speed
+            else
+                if bodyGyro then bodyGyro:Destroy() end
+                if bodyVel then bodyVel:Destroy() end
+            end
+        end)
+    end
+end)
