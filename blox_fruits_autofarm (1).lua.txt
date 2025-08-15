@@ -1,0 +1,278 @@
+
+--============================================================--
+-- Blox Fruits - Auto Farm (Hover + Tween cfg + Hitbox + Auto Click)
+-- Mantém Fluent UI, adiciona Tab Shop e troca Fast Attack por:
+--   • Hitbox sempre ativa no alvo
+--   • Auto Click rápido (ligado por padrão, CPS ajustável na UI Settings)
+--============================================================--
+
+--===== UI (Fluent) =====--
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "araujo7xp",
+    SubTitle = "Blox Fruits Hub",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+--=========================== Utils ===========================--
+local Players            = game:GetService("Players")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local Workspace          = game:GetService("Workspace")
+local TweenService       = game:GetService("TweenService")
+local RunService         = game:GetService("RunService")
+local VirtualUser        = game:GetService("VirtualUser")
+
+local LP                 = Players.LocalPlayer
+local connections        = {}
+local threads            = {}
+
+local function Char() return LP.Character or LP.CharacterAdded:Wait() end
+local function HRP() return Char():WaitForChild("HumanoidRootPart") end
+local function Hum() return Char():WaitForChild("Humanoid") end
+local function getLevel() local ok,v=pcall(function()return LP.Data.Level.Value end); return ok and v or 1 end
+
+local function clearThreads()
+    for k,th in pairs(threads) do
+        if th and coroutine.status(th) ~= "dead" then
+            threads[k] = nil
+        end
+    end
+end
+local function clearConnections()
+    for k,con in pairs(connections) do
+        if con then con:Disconnect() end
+        connections[k] = nil
+    end
+end
+
+--==================== Tweener Config =========================--
+local TweenSPS = 140
+local function tweenTo(cf)
+    if not cf then return end
+    local root = HRP()
+    local dist = (root.Position - cf.Position).Magnitude
+    local t = math.clamp(dist / math.max(10, TweenSPS), 0.25, 3.0)
+    local info = TweenInfo.new(t, Enum.EasingStyle.Linear)
+    local tw = TweenService:Create(root, info, {CFrame = cf})
+    tw:Play(); tw.Completed:Wait()
+end
+
+local function setSpawn() pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer("SetSpawnPoint") end) end
+local function hasQuest()
+    local ok, main = pcall(function() return LP.PlayerGui.Main end)
+    if not ok or not main then return false end
+    local q = main:FindFirstChild("Quest")
+    return q and q.Visible or false
+end
+
+--==================== Travel por mar/ilha ====================--
+local function ensureSea(sea)
+    if sea == 1 and game.PlaceId ~= 2753915549 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelMain") end
+    if sea == 2 and game.PlaceId ~= 4442272183 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelDressrosa") end
+    if sea == 3 and game.PlaceId ~= 7449423635 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelZou") end
+end
+
+--==================== Seleção de arma ========================--
+local SelectedCategory = "Melee"
+local weaponList = {
+    Melee = {"Combat","Black Leg","Electro","Dragon Claw","Superhuman","Death Step","Sharkman Karate","Electric Claw","Dragon Talon","Godhuman"},
+    Sword = {"Katana","Cutlass","Saber","Dark Blade","Rengoku","Yama","Tushita","True Triple Katana","Warden's Sword","Shisui","Saddi","Wando"},
+    Gun   = {"Slingshot","Musket","Refined Musket","Bizarre Rifle","Cannon","Kabucha","Acidum Rifle"},
+    ["Blox Fruit"] = {"Light-Light","Flame-Flame","Magma-Magma","Ice-Ice","Buddha-Buddha","Dough-Dough","Dragon-Dragon","Leopard-Leopard","Spirit-Spirit","Venom-Venom","Phoenix-Phoenix","Quake-Quake"}
+}
+local function equipWeapon()
+    local Backpack = LP:FindFirstChild("Backpack")
+    local Ch = Char()
+    if not Backpack then return end
+    local list = weaponList[SelectedCategory]
+    if list then
+        for _,name in ipairs(list) do
+            local tool = Backpack:FindFirstChild(name) or Ch:FindFirstChild(name)
+            if tool and tool:IsA("Tool") then tool.Parent = Ch return true end
+        end
+    end
+    for _,tool in ipairs(Backpack:GetChildren()) do
+        if tool:IsA("Tool") then tool.Parent = Ch return true end
+    end
+end
+
+--================== Hitbox + Auto Click ======================--
+local AutoClickEnabled = true
+local AutoClickCPS     = 12
+local HitboxSize       = 60
+
+local function applyBigHitbox(target)
+    if not target then return end
+    local hrp = target:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    pcall(function()
+        hrp.CanCollide = false
+        hrp.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+        hrp.Massless = true
+    end)
+end
+
+local function doAutoClickOnce()
+    local ch = Char()
+    local tool = ch:FindFirstChildOfClass("Tool")
+    if tool then
+        pcall(function() tool:Activate() end)
+    end
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:Button1Down(Vector2.new(0,0))
+        task.wait(0.01)
+        VirtualUser:Button1Up(Vector2.new(0,0))
+    end)
+end
+
+--================== Hover / Combate ==========================--
+local HoverEnabled = true
+local HoverHeight  = 18
+
+--====================== Auto Farm Loop ======================--
+local AutoFarmEnabled = false
+local stopFarmSignal  = false
+
+local function takeQuest(q)
+    if not q then return end
+    ensureSea(q.sea)
+    if q.qpos then tweenTo(q.qpos) end
+    setSpawn()
+    task.wait(0.15)
+    pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer("StartQuest", q.quest, 1) end)
+end
+
+local function hunt(q)
+    equipWeapon()
+    local target = Workspace.Enemies:FindFirstChild(q.npc)
+    if not target then return end
+    local hum  = target:FindFirstChild("Humanoid")
+    local r2   = target:FindFirstChild("HumanoidRootPart")
+    if not (hum and r2) then return end
+    applyBigHitbox(target)
+    local above = r2.CFrame * CFrame.new(0, HoverHeight, 0)
+    tweenTo(above)
+    repeat
+        if stopFarmSignal then return end
+        if HoverEnabled then
+            HRP().CFrame = r2.CFrame * CFrame.new(0, HoverHeight, 0)
+        else
+            if (HRP().Position - r2.Position).Magnitude > 3 then
+                HRP().CFrame = r2.CFrame * CFrame.new(0,0,3)
+            end
+        end
+        applyBigHitbox(target)
+        if AutoClickEnabled then
+            doAutoClickOnce()
+            task.wait(math.clamp(1 / math.max(1, AutoClickCPS), 0.02, 0.5))
+        else
+            task.wait()
+        end
+    until hum.Health <= 0 or not target.Parent
+end
+
+local function farmLoop()
+    stopFarmSignal = false
+    while AutoFarmEnabled and not stopFarmSignal do
+        local lvl = getLevel()
+        local q = questForLevel(lvl)
+        if not q then task.wait(0.25) continue end
+        ensureSea(q.sea)
+        if not hasQuest() then takeQuest(q) end
+        hunt(q)
+        RunService.Heartbeat:Wait()
+    end
+end
+
+--======================== ABA: Auto Farm ====================--
+local farmTab = Window:AddTab({ Title = "Auto Farm", Icon = "swords" })
+
+farmTab:AddDropdown("weaponCat", {
+    Title = "Arma para usar",
+    Values = {"Melee","Sword","Gun","Blox Fruit"},
+    Default = 1,
+    Callback = function(v) SelectedCategory = v end
+})
+
+farmTab:AddToggle("autoFarmToggle", {
+    Title = "Ativar Auto Farm Level",
+    Default = false,
+    Callback = function(state)
+        AutoFarmEnabled = state
+        if state then
+            clearThreads(); clearConnections()
+            threads.farm = task.spawn(farmLoop)
+        else
+            stopFarmSignal = true
+            clearThreads(); clearConnections()
+        end
+    end
+})
+
+farmTab:AddSlider("tweenSps", {
+    Title = "Velocidade do Tween (studs/s)",
+    Description = "Menor = mais devagar",
+    Default = TweenSPS,
+    Min = 60,
+    Max = 300,
+    Rounding = 0,
+    Callback = function(v) TweenSPS = v end
+})
+
+farmTab:AddToggle("hoverToggle", {
+    Title = "Voar sobre o NPC (Hover)",
+    Default = HoverEnabled,
+    Callback = function(state) HoverEnabled = state end
+})
+
+farmTab:AddSlider("hoverHeight", {
+    Title = "Altura do Hover",
+    Description = "Altura acima do NPC",
+    Default = HoverHeight,
+    Min = 8,
+    Max = 35,
+    Rounding = 0,
+    Callback = function(val) HoverHeight = val end
+})
+
+--======================== UI Settings =======================--
+local SettingsTab = Window:AddTab({ Title = "UI Settings", Icon = "settings" })
+
+InterfaceManager:SetLibrary(Fluent)
+InterfaceManager:SetFolder("araujo7xpHub")
+InterfaceManager:BuildInterfaceSection(SettingsTab)
+
+SettingsTab:AddSlider("autoClickCps", {
+    Title = "Auto Click - CPS",
+    Description = "Cliques por segundo (1 a 30)",
+    Default = AutoClickCPS,
+    Min = 1,
+    Max = 30,
+    Rounding = 0,
+    Callback = function(val) AutoClickCPS = val end
+})
+
+SettingsTab:AddSlider("hitboxSize", {
+    Title = "Tamanho da Hitbox (HRP do NPC)",
+    Description = "Aumenta o alcance do hit",
+    Default = HitboxSize,
+    Min = 30,
+    Max = 120,
+    Rounding = 0,
+    Callback = function(val) HitboxSize = val end
+})
+
+Window:SelectTab(1)
+
+Fluent:Notify({
+    Title = "araujo7xp",
+    Content = "UI carregada. Auto Click ligado (CPS ajustável em UI Settings).",
+    Duration = 6
+})
