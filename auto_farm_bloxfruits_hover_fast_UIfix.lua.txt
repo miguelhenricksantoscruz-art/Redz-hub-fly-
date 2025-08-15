@@ -1,0 +1,293 @@
+--============================================================--
+-- Blox Fruits - Auto Farm Level (Fast Attack + Hover)
+-- Mantém Fluent UI e adiciona controles na aba "Auto Farm"
+--============================================================--
+
+--===== UI (Fluent) =====--
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+local Window = Fluent:CreateWindow({
+    Title = "araujo7xp",
+    SubTitle = "Blox Fruits Auto Farm",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+--=========================== Utils ===========================--
+local Players            = game:GetService("Players")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local Workspace          = game:GetService("Workspace")
+local TweenService       = game:GetService("TweenService")
+local RunService         = game:GetService("RunService")
+local VirtualUser        = game:GetService("VirtualUser")
+local LP                 = Players.LocalPlayer
+
+local function Char() return LP.Character or LP.CharacterAdded:Wait() end
+local function HRP() return Char():WaitForChild("HumanoidRootPart") end
+local function getLevel() local ok,v=pcall(function()return LP.Data.Level.Value end); return ok and v or 1 end
+
+local function tweenTo(cf, t)
+    if not cf then return end
+    local root = HRP()
+    local info = TweenInfo.new(t or 1.0, Enum.EasingStyle.Linear)
+    local tw = TweenService:Create(root, info, {CFrame = cf})
+    tw:Play(); tw.Completed:Wait()
+end
+
+local function setSpawn() pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer("SetSpawnPoint") end) end
+local function hasQuest()
+    local ok, main = pcall(function() return LP.PlayerGui.Main end)
+    if not ok or not main then return false end
+    local q = main:FindFirstChild("Quest")
+    return q and q.Visible or false
+end
+
+--==================== Travel por mar/ilha ====================--
+local function ensureSea(sea)
+    if sea == 1 and game.PlaceId ~= 2753915549 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelMain") end
+    if sea == 2 and game.PlaceId ~= 4442272183 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelDressrosa") end
+    if sea == 3 and game.PlaceId ~= 7449423635 then ReplicatedStorage.Remotes.CommF_:InvokeServer("TravelZou") end
+end
+
+--==================== Seleção de arma ========================--
+local SelectedCategory = "Melee"
+local weaponList = {
+    Melee = {"Combat","Black Leg","Electro","Dragon Claw","Superhuman","Death Step","Sharkman Karate","Electric Claw","Dragon Talon","Godhuman"},
+    Sword = {"Katana","Cutlass","Saber","Dark Blade","Rengoku","Yama","Tushita","True Triple Katana","Warden's Sword","Shisui","Saddi","Wando"},
+    Gun   = {"Slingshot","Musket","Refined Musket","Bizarre Rifle","Cannon","Kabucha","Acidum Rifle"},
+    ["Blox Fruit"] = {"Light-Light","Flame-Flame","Magma-Magma","Ice-Ice","Buddha-Buddha","Dough-Dough","Dragon-Dragon","Leopard-Leopard","Spirit-Spirit","Venom-Venom","Phoenix-Phoenix","Quake-Quake"}
+}
+local function equipWeapon()
+    local Backpack = LP:FindFirstChild("Backpack")
+    local Ch = Char()
+    if not Backpack then return end
+    local list = weaponList[SelectedCategory]
+    if list then
+        for _,name in ipairs(list) do
+            local tool = Backpack:FindFirstChild(name) or Ch:FindFirstChild(name)
+            if tool and tool:IsA("Tool") then tool.Parent = Ch return true end
+        end
+    end
+    for _,tool in ipairs(Backpack:GetChildren()) do
+        if tool:IsA("Tool") then tool.Parent = Ch return true end
+    end
+end
+
+--====================== Quest Database =======================--
+local cf = CFrame.new
+local QuestDB = {
+    -- FIRST SEA
+    {min=1,   max=9,   sea=1, quest="BanditQuest1",     npc="Bandit",              qpos=cf(1060, 16, 1547),  epos={cf(1120,16,1580), cf(1080,16,1500)}},
+    {min=10,  max=14,  sea=1, quest="JungleQuest",      npc="Monkey",              qpos=cf(-1603, 36, 152),  epos={cf(-1213,12,392), cf(-1275,12,320)}},
+    {min=15,  max=29,  sea=1, quest="JungleQuest",      npc="Gorilla",             qpos=cf(-1603, 36, 152),  epos={cf(-1130,16,-526), cf(-1080,16,-570)}},
+    {min=30,  max=39,  sea=1, quest="BuggyQuest1",      npc="Pirate",              qpos=cf(-1148,4,3826),    epos={cf(-1216,5,3890), cf(-1180,6,3950)}},
+    {min=40,  max=59,  sea=1, quest="BuggyQuest1",      npc="Brute",               qpos=cf(-1148,4,3826),    epos={cf(-1254,14,4300), cf(-1300,14,4250)}},
+    {min=60,  max=74,  sea=1, quest="DesertQuest",      npc="Desert Bandit",       qpos=cf(904,7,4487),      epos={cf(957,7,4537), cf(910,7,4560)}},
+    {min=75,  max=89,  sea=1, quest="DesertQuest",      npc="Desert Officer",      qpos=cf(904,7,4487),      epos={cf(1550,15,4380), cf(1500,15,4440)}},
+    {min=90,  max=99,  sea=1, quest="SnowQuest",        npc="Snow Bandit",         qpos=cf(1389,87,-1317),   epos={cf(1350,87,-1250), cf(1410,87,-1260)}},
+    {min=100, max=119, sea=1, quest="SnowQuest",        npc="Snowman",             qpos=cf(1389,87,-1317),   epos={cf(1190,115,-1440), cf(1240,115,-1400)}},
+    {min=120, max=149, sea=1, quest="MarineQuest2",     npc="Chief Petty",         qpos=cf(-4971,20,4317),   epos={cf(-4900,20,4280), cf(-4930,20,4360)}},
+    {min=150, max=174, sea=1, quest="SkyQuest",         npc="Sky Bandit",          qpos=cf(-4986,717,-2623), epos={cf(-4940,793,-2660), cf(-5000,793,-2700)}},
+    {min=175, max=189, sea=1, quest="SkyQuest",         npc="Dark Master",         qpos=cf(-4986,717,-2623), epos={cf(-5250,840,-2270), cf(-5200,840,-2350)}},
+    {min=190, max=209, sea=1, quest="PrisonerQuest",    npc="Prisoner",            qpos=cf(4868,5,739),      epos={cf(5240,5,800), cf(5170,5,760)}},
+    {min=210, max=249, sea=1, quest="MagmaQuest",       npc="Military Soldier",    qpos=cf(-5314,11,8477),   epos={cf(-5320,13,8570), cf(-5360,13,8520)}},
+    {min=250, max=299, sea=1, quest="MagmaQuest",       npc="Military Spy",        qpos=cf(-5314,11,8477),   epos={cf(-5810,70,8780), cf(-5850,70,8720)}},
+    {min=300, max=324, sea=1, quest="FishmanQuest",     npc="Pirate",              qpos=cf(61146,19,1811),   epos={cf(61190,19,1850), cf(61240,19,1780)}},
+    {min=325, max=374, sea=1, quest="FishmanQuest",     npc="Fishman Warrior",     qpos=cf(61146,19,1811),   epos={cf(61650,45,1500), cf(61570,45,1550)}},
+    {min=375, max=399, sea=1, quest="SkyExp1Quest",     npc="God's Guard",         qpos=cf(-7864,5567,-382), epos={cf(-7720,5560,-510), cf(-7800,5560,-460)}},
+    {min=400, max=449, sea=1, quest="SkyExp1Quest",     npc="Shanda",              qpos=cf(-7864,5567,-382), epos={cf(-7680,5565,-900), cf(-7620,5565,-950)}},
+    {min=450, max=474, sea=1, quest="SkyExp2Quest",     npc="Royal Squad",         qpos=cf(-7900,5637,-1424),epos={cf(-8000,5650,-1520), cf(-7940,5650,-1480)}},
+    {min=475, max=524, sea=1, quest="SkyExp2Quest",     npc="Royal Soldier",       qpos=cf(-7900,5637,-1424),epos={cf(-8050,5665,-1290), cf(-8100,5665,-1340)}},
+    {min=525, max=624, sea=1, quest="FountainQuest",    npc="Galley Pirate",       qpos=cf(5273,38,4054),    epos={cf(5670,38,4040), cf(5610,38,4100)}},
+    {min=625, max=699, sea=1, quest="FountainQuest",    npc="Galley Captain",      qpos=cf(5273,38,4054),    epos={cf(5970,125,4890), cf(5920,125,4840)}},
+
+    -- SECOND SEA
+    {min=700, max=724, sea=2, quest="Area1Quest",       npc="Raider",              qpos=cf(-428,73,1837),    epos={cf(-530,73,1730), cf(-470,73,1760)}},
+    {min=725, max=774, sea=2, quest="Area1Quest",       npc="Mercenary",           qpos=cf(-428,73,1837),    epos={cf(-930,73,1760), cf(-880,73,1700)}},
+    {min=775, max=799, sea=2, quest="Area2Quest",       npc="Swan Pirate",         qpos=cf(634,73,918),      epos={cf(710,73,1020), cf(660,73,970)}},
+    {min=800, max=874, sea=2, quest="Area2Quest",       npc="Factory Staff",       qpos=cf(634,73,918),      epos={cf(460,73,900), cf(520,73,940)}},
+    {min=875, max=899, sea=2, quest="MarineQuest3",     npc="Marine Lieutenant",   qpos=cf(-2777,73,-742),   epos={cf(-2870,73,-820), cf(-2820,73,-770)}},
+    {min=900, max=949, sea=2, quest="MarineQuest3",     npc="Marine Captain",      qpos=cf(-2777,73,-742),   epos={cf(-3050,73,-620), cf(-2990,73,-680)}},
+    {min=950, max=974, sea=2, quest="ZombieQuest",      npc="Zombie",              qpos=cf(-5497,48,-793),   epos={cf(-5560,48,-880), cf(-5520,48,-830)}},
+    {min=975, max=999, sea=2, quest="ZombieQuest",      npc="Vampire",             qpos=cf(-5497,48,-793),   epos={cf(-5800,115,-929), cf(-5750,115,-970)}},
+    {min=1000,max=1049,sea=2, quest="SnowMountainQuest",npc="Snow Trooper",        qpos=cf(568,402,-5370),   epos={cf(640,400,-5300), cf(600,410,-5340)}},
+    {min=1050,max=1099,sea=2, quest="SnowMountainQuest",npc="Winter Warrior",      qpos=cf(568,402,-5370),   epos={cf(760,460,-5600), cf(720,460,-5560)}},
+    {min=1100,max=1124,sea=2, quest="IceSideQuest",     npc="Lab Subordinate",     qpos=cf(-6065,15,-4901),  epos={cf(-5990,15,-5000), cf(-6030,15,-4950)}},
+    {min=1125,max=1174,sea=2, quest="IceSideQuest",     npc="Horned Warrior",      qpos=cf(-6065,15,-4901),  epos={cf(-6400,20,-4700), cf(-6360,20,-4750)}},
+    {min=1175,max=1199,sea=2, quest="FireSideQuest",    npc="Magma Ninja",         qpos=cf(-5411,15,-5277),  epos={cf(-5400,15,-5400), cf(-5440,15,-5340)}},
+    {min=1200,max=1249,sea=2, quest="FireSideQuest",    npc="Lava Pirate",         qpos=cf(-5411,15,-5277),  epos={cf(-5210,25,-5550), cf(-5260,25,-5490)}},
+    {min=1250,max=1274,sea=2, quest="ShipQuest1",       npc="Ship Deckhand",       qpos=cf(1195,125,32860),  epos={cf(1210,125,32920), cf(1180,125,32960)}},
+    {min=1275,max=1299,sea=2, quest="ShipQuest1",       npc="Ship Engineer",       qpos=cf(1195,125,32860),  epos={cf(1160,125,33090), cf(1130,125,33030)}},
+    {min=1300,max=1324,sea=2, quest="ShipQuest2",       npc="Ship Steward",        qpos=cf(968,125,33090),   epos={cf(980,125,33200), cf(960,125,33140)}},
+    {min=1325,max=1349,sea=2, quest="ShipQuest2",       npc="Ship Officer",        qpos=cf(968,125,33090),   epos={cf(940,125,33150), cf(900,125,33210)}},
+    {min=1350,max=1374,sea=2, quest="FrostQuest",       npc="Arctic Warrior",      qpos=cf(6048,29,-6201),   epos={cf(6100,29,-6250), cf(6060,29,-6180)}},
+    {min=1375,max=1424,sea=2, quest="FrostQuest",       npc="Snow Lurker",         qpos=cf(6048,29,-6201),   epos={cf(5950,35,-6400), cf(6000,35,-6360)}},
+    {min=1425,max=1449,sea=2, quest="ForgottenQuest",   npc="Sea Soldier",         qpos=cf(-3051,238,-10238),epos={cf(-3000,238,-10300), cf(-3070,238,-10200)}},
+    {min=1450,max=1499,sea=2, quest="ForgottenQuest",   npc="Water Fighter",       qpos=cf(-3051,238,-10238),epos={cf(-3100,238,-10100), cf(-3020,238,-10160)}},
+
+    -- THIRD SEA
+    {min=1500,max=1524,sea=3, quest="PiratePortQuest",  npc="Pirate Millionaire",  qpos=cf(-288,44,5578),    epos={cf(-340,44,5680), cf(-300,44,5620)}},
+    {min=1525,max=1574,sea=3, quest="PiratePortQuest",  npc="Pistol Billionaire",  qpos=cf(-288,44,5578),    epos={cf(-430,44,5800), cf(-380,44,5740)}},
+    {min=1575,max=1599,sea=3, quest="AmazonQuest",      npc="Female Islander",     qpos=cf(5748,199,129),    epos={cf(5660,199,210), cf(5700,199,160)}},
+    {min=1600,max=1624,sea=3, quest="AmazonQuest",      npc="Giant Islander",      qpos=cf(5748,199,129),    epos={cf(5600,220,40),  cf(5640,220,80)}},
+    {min=1625,max=1649,sea=3, quest="MarineTreeIsland", npc="Marine Commodore",    qpos=cf(2273,146,-4357),  epos={cf(2200,146,-4410), cf(2250,146,-4380)}},
+    {min=1650,max=1699,sea=3, quest="MarineTreeIsland", npc="Marine Rear Admiral", qpos=cf(2273,146,-4357),  epos={cf(2360,146,-4500), cf(2320,146,-4460)}},
+    {min=1700,max=1724,sea=3, quest="DeepForestIsland", npc="Forest Pirate",       qpos=cf(-1245,80,-10780), epos={cf(-1180,80,-10700), cf(-1210,80,-10740)}},
+    {min=1725,max=1774,sea=3, quest="DeepForestIsland", npc="Mythological Pirate", qpos=cf(-1245,80,-10780), epos={cf(-1400,90,-10870), cf(-1360,90,-10820)}},
+    {min=1775,max=1799,sea=3, quest="DeepForestIsland2",npc="Jungle Pirate",       qpos=cf(-1337,430,-9486), epos={cf(-1260,430,-9560), cf(-1300,430,-9520)}},
+    {min=1800,max=1824,sea=3, quest="DeepForestIsland2",npc="Musketeer Pirate",    qpos=cf(-1337,430,-9486), epos={cf(-1420,430,-9400), cf(-1380,430,-9440)}},
+    {min=1825,max=1849,sea=3, quest="PineappleTownQuest",npc="Peanut Scout",       qpos=cf(-2132,72,-10177), epos={cf(-2060,72,-10230), cf(-2100,72,-10190)}},
+    {min=1850,max=1899,sea=3, quest="PineappleTownQuest",npc="Peanut President",   qpos=cf(-2132,72,-10177), epos={cf(-1960,84,-10120), cf(-2000,84,-10160)}},
+    {min=1900,max=1924,sea=3, quest="IceCreamIslandQuest",npc="Ice Cream Chef",    qpos=cf(-821,73,-10920),  epos={cf(-900,73,-10860), cf(-860,73,-10900)}},
+    {min=1925,max=1974,sea=3, quest="IceCreamIslandQuest",npc="Ice Cream Commander",qpos=cf(-821,73,-10920), epos={cf(-720,95,-11000), cf(-760,95,-10960)}},
+    {min=1975,max=1999,sea=3, quest="CakeQuest1",       npc="Cookie Crafters",     qpos=cf(-2021,36,-12027), epos={cf(-2100,36,-11960), cf(-2060,36,-12000)}},
+    {min=2000,max=2049,sea=3, quest="CakeQuest1",       npc="Cake Guard",          qpos=cf(-2021,36,-12027), epos={cf(-1960,36,-12130), cf(-2000,36,-12090)}},
+    {min=2050,max=2074,sea=3, quest="CakeQuest2",       npc="Baking Staff",        qpos=cf(-1877,36,-12771), epos={cf(-1935,36,-12820), cf(-1890,36,-12740)}},
+    {min=2075,max=2099,sea=3, quest="CakeQuest2",       npc="Head Baker",          qpos=cf(-1877,36,-12771), epos={cf(-1800,36,-12900), cf(-1840,36,-12860)}},
+    {min=2100,max=2124,sea=3, quest="ChocoIslandQuest", npc="Cocoa Warrior",       qpos=cf(-1123,72,-14365), epos={cf(-1180,72,-14380), cf(-1140,72,-14340)}},
+    {min=2125,max=2149,sea=3, quest="ChocoIslandQuest", npc="Chocolate Bar",       qpos=cf(-1123,72,-14365), epos={cf(-1050,72,-14450), cf(-1090,72,-14410)}},
+    {min=2150,max=2199,sea=3, quest="CandyQuest1",      npc="Candy Rebel",         qpos=cf(-990,88,-15180),  epos={cf(-1030,88,-15260), cf(-990,88,-15120)}},
+    {min=2200,max=2249,sea=3, quest="CandyQuest1",      npc="Candy Pirate",        qpos=cf(-990,88,-15180),  epos={cf(-920,88,-15050),  cf(-960,88,-15100)}},
+    {min=2250,max=2299,sea=3, quest="CandyQuest2",      npc="Snow Demon",          qpos=cf(-820,110,-15560), epos={cf(-860,110,-15630), cf(-830,110,-15590)}},
+    {min=2300,max=2349,sea=3, quest="CandyQuest2",      npc="Isle Champion",       qpos=cf(-820,110,-15560), epos={cf(-780,110,-15480), cf(-800,110,-15520)}},
+    {min=2350,max=2399,sea=3, quest="TikiQuest1",       npc="Pineapple Hunter",    qpos=cf(-360,85,-16010),  epos={cf(-420,85,-16080), cf(-380,85,-16040)}},
+    {min=2400,max=2449,sea=3, quest="TikiQuest1",       npc="Banana Warrior",      qpos=cf(-360,85,-16010),  epos={cf(-300,85,-15940), cf(-340,85,-15990)}},
+    {min=2450,max=2499,sea=3, quest="TikiQuest2",       npc="Coconut Captain",     qpos=cf(-220,95,-16350),  epos={cf(-260,95,-16420), cf(-230,95,-16380)}},
+    {min=2500,max=2550,sea=3, quest="TikiQuest2",       npc="Palm Enforcer",       qpos=cf(-220,95,-16350),  epos={cf(-190,95,-16260), cf(-210,95,-16310)}},
+}
+
+local function questForLevel(lvl)
+    local chosen
+    for _,q in ipairs(QuestDB) do
+        if lvl >= q.min and (not q.max or lvl <= q.max) then chosen = q end
+    end
+    return chosen
+end
+
+local function findEnemyByNamePart(namePart)
+    local lower = string.lower(namePart or "")
+    for _,mob in ipairs(Workspace.Enemies:GetChildren()) do
+        local h = mob:FindFirstChild("Humanoid")
+        local r = mob:FindFirstChild("HumanoidRootPart")
+        if h and r and h.Health > 0 then
+            if string.find(string.lower(mob.Name), lower) then
+                return mob
+            end
+        end
+    end
+end
+
+--================== Fast Attack + Hover =====================--
+local FastAttackEnabled = true
+local HoverEnabled = true
+local HoverHeight = 18
+
+local function fastClickOnce()
+    VirtualUser:CaptureController()
+    VirtualUser:Button1Down(Vector2.new(0,0))
+    task.wait(0.035)
+    VirtualUser:Button1Up(Vector2.new(0,0))
+end
+
+--====================== Auto Farm Loop ======================--
+local AutoFarmEnabled = false
+
+local function takeQuest(q)
+    if not q then return end
+    ensureSea(q.sea)
+    if q.qpos then tweenTo(q.qpos, 1.15) end
+    setSpawn()
+    task.wait(0.2)
+    pcall(function() ReplicatedStorage.Remotes.CommF_:InvokeServer("StartQuest", q.quest, 1) end)
+end
+
+local function hunt(q)
+    equipWeapon()
+    local target = findEnemyByNamePart(q.npc)
+    if not target then
+        if q.epos and #q.epos > 0 then tweenTo(q.epos[1], 1.0) end
+        return
+    end
+    local root = HRP()
+    local hum  = target:FindFirstChild("Humanoid")
+    local r2   = target:FindFirstChild("HumanoidRootPart")
+    if not (hum and r2) then return end
+
+    repeat
+        if HoverEnabled then
+            root.CFrame = r2.CFrame * CFrame.new(0, HoverHeight, 0)
+        else
+            if (root.Position - r2.Position).Magnitude > 3 then
+                root.CFrame = r2.CFrame * CFrame.new(0,0,3)
+            end
+        end
+        if FastAttackEnabled then fastClickOnce() end
+        task.wait()
+    until hum.Health <= 0 or not target.Parent
+end
+
+local function farmLoop()
+    while AutoFarmEnabled do
+        local lvl = getLevel()
+        local q = questForLevel(lvl)
+        if not q then task.wait(0.2) continue end
+        ensureSea(q.sea)
+        if not hasQuest() then takeQuest(q) end
+        hunt(q)
+        RunService.Heartbeat:Wait()
+    end
+end
+
+--======================== ABA: Auto Farm ====================--
+local farmTab = Window:AddTab({ Title = "Auto Farm", Icon = "swords" })
+
+farmTab:AddDropdown("weaponCat", {
+    Title = "Arma para usar",
+    Values = {"Melee","Sword","Gun","Blox Fruit"},
+    Default = 1,
+    Callback = function(v) SelectedCategory = v end
+})
+
+farmTab:AddToggle("autoFarmToggle", {
+    Title = "Ativar Auto Farm Level",
+    Default = false,
+    Callback = function(state)
+        AutoFarmEnabled = state
+        if state then task.spawn(farmLoop) end
+    end
+})
+
+farmTab:AddToggle("fastAtkToggle", {
+    Title = "Fast Attack",
+    Default = true,
+    Callback = function(state) FastAttackEnabled = state end
+})
+
+farmTab:AddToggle("hoverToggle", {
+    Title = "Voar sobre o NPC (Hover)",
+    Default = true,
+    Callback = function(state) HoverEnabled = state end
+})
+
+farmTab:AddSlider("hoverHeight", {
+    Title = "Altura do Hover",
+    Description = "Altura acima do NPC (padrão 18)",
+    Default = 18,
+    Min = 8,
+    Max = 35,
+    Rounding = 0,
+    Callback = function(val) HoverHeight = val end
+})
+
+--======================== UI Settings =======================--
+local Settings = Window:AddTab({ Title = "UI Settings", Icon = "settings" })
+InterfaceManager:SetLibrary(Fluent)
+InterfaceManager:SetFolder("FluentScriptHub")
+InterfaceManager:BuildInterfaceSection(Settings)
+Window:SelectTab(2)
+
+Fluent:Notify({ Title = "Auto Farm", Content = "UI carregada. Abra a aba 'Auto Farm'.", Duration = 5 })
