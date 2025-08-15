@@ -1,0 +1,138 @@
+-- Blox Fruits Auto Farm Completo com Fast Attack + Hover Farm
+-- Interface: Fluent UI
+-- Autor: Miguel + Assistente
+
+-- Carregar bibliotecas
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- Criar janela
+local Window = Fluent:CreateWindow({
+    Title = "araujo7xp",
+    SubTitle = "Blox Fruits Auto Farm",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = true,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+-- Configurações
+local Settings = Window:AddTab({ Title = "UI Settings", Icon = "settings" })
+InterfaceManager:SetLibrary(Fluent)
+InterfaceManager:SetFolder("FluentScriptHub")
+InterfaceManager:BuildInterfaceSection(Settings)
+Window:SelectTab(1)
+
+-- Dados das quests por level
+local QuestData = {
+    [1] = { QuestName = "BanditQuest1", QuestLevelReq = 1, MobName = "Bandit", Pos = Vector3.new(1058, 17, 1547), CFrameMob = CFrame.new(1145, 17, 1614) },
+    -- Adicionar as coordenadas reais de todos os NPCs até o level máximo
+    -- Exemplo:
+    -- [10] = { QuestName = "MonkeyQuest", QuestLevelReq = 10, MobName = "Monkey", Pos = Vector3.new(...), CFrameMob = CFrame.new(...) },
+}
+
+-- Variáveis
+local AutoFarm = false
+local SelectedWeapon = "Melee"
+local FastAttack = true
+local HoverFarm = true
+
+-- Função para equipar arma
+local function equipWeapon()
+    local char = game.Players.LocalPlayer.Character
+    local backpack = game.Players.LocalPlayer.Backpack
+    if backpack:FindFirstChild(SelectedWeapon) then
+        char.Humanoid:EquipTool(backpack:FindFirstChild(SelectedWeapon))
+    elseif char:FindFirstChild(SelectedWeapon) then
+        return true
+    end
+end
+
+-- Função fast attack
+spawn(function()
+    while task.wait(0.1) do
+        if AutoFarm and FastAttack then
+            pcall(function()
+                game:GetService("VirtualUser"):Button1Down(Vector2.new(), workspace.CurrentCamera.CFrame)
+                task.wait(0.05)
+                game:GetService("VirtualUser"):Button1Up(Vector2.new(), workspace.CurrentCamera.CFrame)
+            end)
+        end
+    end
+end)
+
+-- Função principal de farm
+spawn(function()
+    while task.wait() do
+        if AutoFarm then
+            pcall(function()
+                local myLevel = game.Players.LocalPlayer.Data.Level.Value
+                local data
+                for _, v in pairs(QuestData) do
+                    if myLevel >= v.QuestLevelReq then
+                        data = v
+                    end
+                end
+                if data then
+                    -- Checar missão
+                    local quest = game:GetService("Players").LocalPlayer.PlayerGui.Main.Quest
+                    if not quest.Visible then
+                        game:GetService("ReplicatedStorage").Remotes.CommF_:InvokeServer("SetSpawnPoint")
+                        game:GetService("ReplicatedStorage").Remotes.CommF_:InvokeServer("StartQuest", data.QuestName, 1)
+                    else
+                        equipWeapon()
+                        local mob = workspace.Enemies:FindFirstChild(data.MobName)
+                        if mob and mob:FindFirstChild("HumanoidRootPart") and mob:FindFirstChild("Humanoid") and mob.Humanoid.Health > 0 then
+                            if HoverFarm then
+                                game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = mob.HumanoidRootPart.CFrame * CFrame.new(0, 20, 0)
+                            else
+                                game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = mob.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+                            end
+                        else
+                            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(data.CFrameMob.Position)
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- Aba de farm
+local farmTab = Window:AddTab({ Title = "Auto Farm", Icon = "swords" })
+farmTab:AddToggle({
+    Title = "Ativar Auto Farm",
+    Default = false,
+    Callback = function(state)
+        AutoFarm = state
+    end
+})
+farmTab:AddDropdown({
+    Title = "Selecionar Arma",
+    Values = { "Melee", "Sword", "Gun", "Blox Fruit" },
+    Default = "Melee",
+    Callback = function(value)
+        SelectedWeapon = value
+    end
+})
+farmTab:AddToggle({
+    Title = "Fast Attack",
+    Default = true,
+    Callback = function(state)
+        FastAttack = state
+    end
+})
+farmTab:AddToggle({
+    Title = "Hover Farm (Voar sobre NPC)",
+    Default = true,
+    Callback = function(state)
+        HoverFarm = state
+    end
+})
+
+Fluent:Notify({
+    Title = "Auto Farm Carregado",
+    Content = "Script pronto para uso!",
+    Duration = 5
+})
