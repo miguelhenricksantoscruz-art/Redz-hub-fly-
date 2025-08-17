@@ -1,0 +1,166 @@
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+
+-- GUI Setup
+local ScreenGui = Instance.new("ScreenGui", game.CoreGui)
+local Frame = Instance.new("Frame", ScreenGui)
+Frame.Size = UDim2.new(0, 230, 0, 350)
+Frame.Position = UDim2.new(0, 20, 0, 100)
+Frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+Frame.Active = true
+Frame.Draggable = true
+
+local function createButton(text, y, callback)
+    local btn = Instance.new("TextButton", Frame)
+    btn.Size = UDim2.new(0, 210, 0, 30)
+    btn.Position = UDim2.new(0, 10, 0, y)
+    btn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.SourceSansBold
+    btn.TextSize = 14
+    btn.Text = text
+    btn.MouseButton1Click:Connect(callback)
+end
+
+-- Flags
+local autoKill = false
+local autoClick = false
+local autoClickV2 = false
+local autoFarmBoss = false
+local espEnabled = false
+
+-- Auto Kill
+createButton("Auto Kill Players", 10, function()
+    autoKill = not autoKill
+end)
+
+-- Auto Click
+createButton("Auto Click", 50, function()
+    autoClick = not autoClick
+end)
+
+-- Auto Click V2
+createButton("Auto Click V2", 90, function()
+    autoClickV2 = not autoClickV2
+end)
+
+-- Auto Farm Boss
+createButton("Auto Farm Bosses", 130, function()
+    autoFarmBoss = not autoFarmBoss
+end)
+
+-- ESP Players
+createButton("Toggle ESP Players", 170, function()
+    espEnabled = not espEnabled
+    for _, v in pairs(Workspace:GetChildren()) do
+        if v:FindFirstChild("Humanoid") and v ~= LocalPlayer.Character then
+            if v:FindFirstChild("ESP") then
+                v:FindFirstChild("ESP"):Destroy()
+            end
+        end
+    end
+end)
+
+-- TELEPORTS
+createButton("Teleport: Ilha Inicial", 210, function()
+    LocalPlayer.Character:MoveTo(Vector3.new(0, 10, 0)) -- ajuste coordenadas
+end)
+
+createButton("Teleport: Ilha de Fogo", 250, function()
+    LocalPlayer.Character:MoveTo(Vector3.new(1200, 15, -800)) -- ajuste coordenadas
+end)
+
+createButton("Teleport: Boss Principal", 290, function()
+    LocalPlayer.Character:MoveTo(Vector3.new(4000, 20, -2000)) -- ajuste coordenadas
+end)
+
+-- Auto Kill Loop
+spawn(function()
+    while true do
+        if autoKill then
+            for _, player in pairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    local target = player.Character.HumanoidRootPart
+                    local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                    if tool then
+                        LocalPlayer.Character.HumanoidRootPart.CFrame = target.CFrame * CFrame.new(0, 0, 2)
+                        tool:Activate()
+                    end
+                end
+            end
+        end
+        wait(1)
+    end
+end)
+
+-- Auto Click
+spawn(function()
+    while true do
+        if autoClick then
+            local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                tool:Activate()
+            end
+        end
+        wait(0.2)
+    end
+end)
+
+-- Auto Click V2
+spawn(function()
+    while true do
+        if autoClickV2 then
+            mouse1click()
+        end
+        wait(0.1)
+    end
+end)
+
+-- Auto Farm Boss
+spawn(function()
+    while true do
+        if autoFarmBoss then
+            for _, npc in pairs(Workspace:GetDescendants()) do
+                if npc:IsA("Model") and npc:FindFirstChild("Humanoid") and npc.Name:lower():find("boss") then
+                    if npc:FindFirstChild("HumanoidRootPart") then
+                        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+                        if tool then
+                            LocalPlayer.Character.HumanoidRootPart.CFrame = npc.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+                            tool:Activate()
+                        end
+                    end
+                end
+            end
+        end
+        wait(1)
+    end
+end)
+
+-- ESP Players
+RunService.RenderStepped:Connect(function()
+    if espEnabled then
+        for _, player in pairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local head = player.Character:FindFirstChild("Head")
+                if head and not head:FindFirstChild("ESP") then
+                    local bill = Instance.new("BillboardGui", head)
+                    bill.Name = "ESP"
+                    bill.Size = UDim2.new(0, 100, 0, 20)
+                    bill.AlwaysOnTop = true
+                    bill.StudsOffset = Vector3.new(0, 3, 0)
+
+                    local label = Instance.new("TextLabel", bill)
+                    label.Size = UDim2.new(1, 0, 1, 0)
+                    label.BackgroundTransparency = 1
+                    label.TextColor3 = Color3.new(1, 0, 0)
+                    label.TextStrokeTransparency = 0.5
+                    label.Text = player.Name
+                    label.TextScaled = true
+                end
+            end
+        end
+    end
+end)
