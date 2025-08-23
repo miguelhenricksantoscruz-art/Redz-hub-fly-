@@ -1,0 +1,316 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+-- Configurações Delta-Optimized
+local Settings = {
+    Enabled = false,
+    AimAssist = true,
+    AutoShoot = true,
+    AutoEquip = true,
+    FOV = 100,
+    MaxDistance = 300,
+    SmoothAim = 0.12,
+    Prediction = true,
+    TeamCheck = true,
+    VisibleCheck = true,
+    Priority = "Closest",
+    Hotkey = Enum.KeyCode.F,
+    EquipKey = Enum.KeyCode.E,
+    EquipCooldown = 2,
+    DeltaMode = true
+}
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+local Mouse = LocalPlayer:GetMouse()
+local Target = nil
+local DeltaConnection = nil
+local LastEquipTime = 0
+local HasWeapon = false
+
+local function DeltaCheck()
+    if not _G.DeltaAPI then
+        warn("Delta API não detectada. Algumas features podem não funcionar.")
+        return false
+    end
+    return true
+end
+
+local function IsValidTarget(player)
+    if not player or not player.Character then return false end
+    if player == LocalPlayer then return false end
+    if Settings.TeamCheck and player.Team == LocalPlayer.Team then return false end
+    
+    local humanoid = player.Character:FindFirstChild("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    
+    return true
+end
+
+local function IsVisible(part)
+    if not Settings.VisibleCheck then return true end
+    
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("Head") then return false end
+    
+    local origin = character.Head.Position
+    local direction = (part.Position - origin).Unit
+    local ray = Ray.new(origin, direction * Settings.MaxDistance)
+    local hit, position = Workspace:FindPartOnRayWithIgnoreList(ray, {character})
+    
+    return hit and (hit == part or hit:IsDescendantOf(part.Parent))
+end
+
+local function CheckWeapon()
+    local character = LocalPlayer.Character
+    if not character then return false end
+    
+    -- Verifica se o jogador tem alguma arma equipada
+    for _, tool in ipairs(character:GetChildren()) do
+        if tool:IsA("Tool") and tool.Enabled then
+            return true
+        end
+    end
+    
+    -- Verifica no backpack também
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if tool:IsA("Tool") then
+                return false -- Tem arma mas não está equipada
+            end
+        end
+    end
+    
+    return false
+end
+
+local function AutoEquipWeapon()
+    if not Settings.AutoEquip then return end
+    if not LocalPlayer.Character then return end
+    
+    local currentTime = tick()
+    if currentTime - LastEquipTime < Settings.EquipCooldown then return end
+    
+    -- Verifica se já tem arma equipada
+    HasWeapon = CheckWeapon()
+    if HasWeapon then return end
+    
+    -- Tenta equipar arma
+    keypress(Settings.EquipKey)
+    task.wait(0.1)
+    keyrelease(Settings.EquipKey)
+    
+    LastEquipTime = currentTime
+    HasWeapon = true
+    
+    print("🔫 Tentando equipar arma...")
+end
+
+local function AimAtTarget()
+    if not Target or not Target.Character then return end
+    
+    local humanoidRootPart = Target.Character:FindFirstChild("HumanoidRootPart")
+    local head = Target.Character:FindFirstChild("Head")
+    local targetPart = head or humanoidRootPart
+    
+    if not targetPart then return end
+    
+    local predictedPosition = targetPart.Position
+    if Settings.Prediction then
+        local bodyVelocity = targetPart:FindFirstChild("BodyVelocity")
+        if bodyVelocity then
+            predictedPosition = predictedPosition + (bodyVelocity.Velocity * 0.2)
+        end
+    end
+    
+    local currentLook = Camera.CFrame.LookVector
+    local targetDirection = (predictedPosition - Camera.CFrame.Position).Unit
+    local smoothedDirection = currentLook:Lerp(targetDirection, Settings.SmoothAim)
+    
+    Camera.CFrame = CFrame.new(Camera.CFrame.Position, Camera.CFrame.Position + smoothedDirection)
+end
+
+local function AutoShoot()
+    if not Settings.AutoShoot or not Target or not Target.Character then return end
+    
+    local humanoid = Target.Character:FindFirstChild("Humanoid")
+    if humanoid and humanoid.Health > 0 then
+        -- Verifica se tem arma antes de atirar
+        if not HasWeapon then
+            AutoEquipWeapon()
+            task.wait(0.5) -- Espera um pouco após equipar
+            return
+        end
+        
+        -- Sistema de tiro com recuo controlado
+        mouse1press()
+        task.wait(0.05) -- Tempo de pressionamento
+        mouse1release()
+        task.wait(0.15) -- Recuo entre tiros
+    end
+end
+
+local function DeltaMainLoop()
+    if not Settings.Enabled or not LocalPlayer.Character then
+        Target = nil
+        return
+    end
+    
+    -- Verifica e equipa arma automaticamente
+    if Settings.AutoEquip then
+        HasWeapon = CheckWeapon()
+        if not HasWeapon then
+            AutoEquipWeapon()
+            return -- Espera equipar antes de procurar alvo
+        end
+    end
+    
+    -- Procura por alvos
+    if not Target or not IsValidTarget(Target) then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if IsValidTarget(player) and player.Character then
+                local rootPart = player.Character:FindFirstChild("HumanoidRootPart")
+                if rootPart and IsVisible(rootPart) then
+                    local distance = (rootPart.Position - Camera.CFrame.Position).Magnitude
+                    if distance <= Settings.MaxDistance then
+                        Target = player
+                        break
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Executa ações no alvo
+    if Target and Target.Character then
+        if Settings.AimAssist then
+            AimAtTarget()
+        end
+        if Settings.AutoShoot then
+            AutoShoot()
+        end
+    end
+end
+
+local function CreateDeltaUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "DeltaAutoKillUI"
+    screenGui.Parent = game.CoreGui
+    
+    local mainFrame = Instance.new("Frame")
+    mainFrame.Size = UDim2.new(0, 300, 0, 250)
+    mainFrame.Position = UDim2.new(0, 10, 0, 10)
+    mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    mainFrame.BorderSizePixel = 0
+    mainFrame.Active = true
+    mainFrame.Draggable = true
+    mainFrame.Parent = screenGui
+    
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, 0, 0, 30)
+    title.BackgroundColor3 = Color3.fromRGB(16, 185, 129)
+    title.Text = "🔫 DELTA AUTO-KILL PRO"
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.Font = Enum.Font.SourceSansBold
+    title.Parent = mainFrame
+    
+    local toggleBtn = Instance.new("TextButton")
+    toggleBtn.Size = UDim2.new(0.9, 0, 0, 30)
+    toggleBtn.Position = UDim2.new(0.05, 0, 0, 40)
+    toggleBtn.Text = "DESATIVADO"
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    toggleBtn.MouseButton1Click:Connect(function()
+        Settings.Enabled = not Settings.Enabled
+        toggleBtn.Text = Settings.Enabled and "ATIVADO" or "DESATIVADO"
+        toggleBtn.BackgroundColor3 = Settings.Enabled and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(100, 100, 100)
+    end)
+    toggleBtn.Parent = mainFrame
+    
+    local autoEquipToggle = Instance.new("TextButton")
+    autoEquipToggle.Size = UDim2.new(0.9, 0, 0, 25)
+    autoEquipToggle.Position = UDim2.new(0.05, 0, 0, 80)
+    autoEquipToggle.Text = "Auto-Equip: " .. (Settings.AutoEquip and "ON" or "OFF")
+    autoEquipToggle.BackgroundColor3 = Settings.AutoEquip and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(100, 100, 100)
+    autoEquipToggle.MouseButton1Click:Connect(function()
+        Settings.AutoEquip = not Settings.AutoEquip
+        autoEquipToggle.Text = "Auto-Equip: " .. (Settings.AutoEquip and "ON" or "OFF")
+        autoEquipToggle.BackgroundColor3 = Settings.AutoEquip and Color3.fromRGB(16, 185, 129) or Color3.fromRGB(100, 100, 100)
+    end)
+    autoEquipToggle.Parent = mainFrame
+    
+    local weaponStatus = Instance.new("TextLabel")
+    weaponStatus.Size = UDim2.new(0.9, 0, 0, 20)
+    weaponStatus.Position = UDim2.new(0.05, 0, 0, 115)
+    weaponStatus.Text = "Arma: Verificando..."
+    weaponStatus.TextColor3 = Color3.new(1, 1, 1)
+    weaponStatus.BackgroundTransparency = 1
+    weaponStatus.Parent = mainFrame
+    
+    local targetStatus = Instance.new("TextLabel")
+    targetStatus.Size = UDim2.new(0.9, 0, 0, 20)
+    targetStatus.Position = UDim2.new(0.05, 0, 0, 140)
+    targetStatus.Text = "Alvo: Nenhum"
+    targetStatus.TextColor3 = Color3.new(1, 1, 1)
+    targetStatus.BackgroundTransparency = 1
+    targetStatus.Parent = mainFrame
+    
+    local infoText = Instance.new("TextLabel")
+    infoText.Size = UDim2.new(0.9, 0, 0, 40)
+    infoText.Position = UDim2.new(0.05, 0, 0, 170)
+    infoText.Text = "Hotkey: F | Auto-Equip: " .. tostring(Settings.EquipKey)
+    infoText.TextColor3 = Color3.fromRGB(200, 200, 200)
+    infoText.BackgroundTransparency = 1
+    infoText.TextSize = 12
+    infoText.Parent = mainFrame
+    
+    -- Atualiza status em tempo real
+    game:GetService("RunService").RenderStepped:Connect(function()
+        targetStatus.Text = Target and "Alvo: " .. Target.Name or "Alvo: Nenhum"
+        weaponStatus.Text = "Arma: " .. (HasWeapon and "Equipada ✅" or "Não Equipada ❌")
+        weaponStatus.TextColor3 = HasWeapon and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(220, 53, 53)
+    end)
+end
+
+local function DeltaInit()
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    
+    if not LocalPlayer.Character then
+        LocalPlayer.CharacterAdded:Wait()
+    end
+    
+    if not DeltaCheck() then
+        warn("Delta Executor não detectado completamente")
+    end
+    
+    CreateDeltaUI()
+    
+    UserInputService.InputBegan:Connect(function(input)
+        if input.KeyCode == Settings.Hotkey then
+            Settings.Enabled = not Settings.Enabled
+        end
+    end)
+    
+    -- Verificação inicial de arma
+    HasWeapon = CheckWeapon()
+    
+    DeltaConnection = RunService.RenderStepped:Connect(DeltaMainLoop)
+    
+    print("🎯 DELTA AUTO-KILL PRO CARREGADO!")
+    print("✅ Pressione F para ativar/desativar")
+    print("✅ Auto-Equip: " .. (Settings.AutoEquip and "Ativado" or "Desativado"))
+    print("✅ Tecla de equipar: " .. tostring(Settings.EquipKey))
+end
+
+task.spawn(DeltaInit)
+
+return {
+    Settings = Settings,
+    GetTarget = function() return Target end,
+    Toggle = function() Settings.Enabled = not Settings.Enabled end,
+    ForceEquip = function() AutoEquipWeapon() end
+}
