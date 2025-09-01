@@ -1,0 +1,832 @@
+--============================================================--
+-- araujo7xp - Blox Fruits (COMPLETO, com comentários)
+-- • Auto Farm 1–2550 + Fast Attack leve
+-- • Auto Click (Fixed / Center / OnTarget) + Hotkey (F6)
+-- • Hitbox ampliada, Hover, Tween Speed, SetSpawn, Travel
+-- • Seleção de arma / Fighting Style
+-- • Auto Stats (Melee / Sword / Gun / Blox Fruta)
+-- • UI Fluent (com fallback simples)
+-- NOTES:
+-- - Teste em servidor privado com conta alterna.
+-- - Script tenta remotes comuns usando pcall; adapte nomes se necessário.
+--============================================================--
+
+-- ========================== Serviços ======================== --
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace         = game:GetService("Workspace")
+local TweenService      = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
+local Lighting          = game:GetService("Lighting")
+local UserInputService  = game:GetService("UserInputService")
+local VirtualUser       = game:GetService("VirtualUser")
+local Vim               = game:GetService("VirtualInputManager")
+
+local LP = Players.LocalPlayer
+local Cam = Workspace.CurrentCamera
+
+-- ========================= NoFog ============================ --
+-- Força fog fora para melhorar visão
+local function forceNoFog()
+    pcall(function()
+        Lighting.FogStart = math.huge
+        Lighting.FogEnd   = math.huge
+        Lighting.FogColor = Color3.fromRGB(255,255,255)
+    end)
+end
+forceNoFog()
+-- Se o jogo tentar alterar, reaplica automaticamente
+Lighting.Changed:Connect(forceNoFog)
+
+-- ========================= Utilitários ====================== --
+-- Conexões e threads: controlamos para parar quando desligamos features
+local connections, threads = {}, {}
+
+local function Char() return (LP.Character or LP.CharacterAdded:Wait()) end
+local function HRP()  return Char():WaitForChild("HumanoidRootPart") end
+local function Hum()  return Char():WaitForChild("Humanoid") end
+
+-- Conecta ao Heartbeat e guarda a conexão
+local function bindHeartbeat(fn)
+    local c = RunService.Heartbeat:Connect(fn)
+    table.insert(connections, c)
+    return c
+end
+
+-- Limpa conexões guardadas
+local function clearConnections()
+    for _,c in ipairs(connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    connections = {}
+end
+
+-- Cancela thread criada (se existir)
+local function stopThread(name)
+    if threads[name] then
+        pcall(function() task.cancel(threads[name]) end)
+        threads[name] = nil
+    end
+end
+
+-- Wrapper seguro para InvokeServer/FireServer (usa pcall e checa remotes)
+local function safeInvokeRemotes(path, ...)
+    -- path like "Remotes.CommF_.StartQuest" or "Remotes.Redeem"
+    -- vamos tentar acessar via ReplicatedStorage["Remotes"]
+    local ok, res = pcall(function()
+        local segs = {}
+        for part in string.gmatch(path, "([^%.]+)") do table.insert(segs, part) end
+        local cur = ReplicatedStorage
+        for i=1,#segs do
+            local name = segs[i]
+            cur = cur[name]
+            if not cur then return nil end
+        end
+        if cur:IsA("RemoteFunction") then
+            return cur:InvokeServer(...)
+        elseif cur:IsA("RemoteEvent") then
+            return cur:FireServer(...)
+        end
+    end)
+    return ok and res or nil
+end
+
+-- =================== Tween / Movimento ====================== --
+local TweenSPS = 140
+local ActiveTween = nil
+
+local function stopTween()
+    if ActiveTween then
+        pcall(function() ActiveTween:Cancel() end)
+        ActiveTween = nil
+    end
+end
+
+-- Faz tween do HRP até o CFrame dado (limita tempo)
+local function tweenTo(cf)
+    if not cf then return end
+    local root = HRP()
+    local dist = (root.Position - cf.Position).Magnitude
+    local t = math.clamp(dist / math.max(10, TweenSPS), 0.25, 3.0)
+    local info = TweenInfo.new(t, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut)
+    stopTween()
+    ActiveTween = TweenService:Create(root, info, {CFrame = cf})
+    ActiveTween:Play()
+    ActiveTween.Completed:Wait()
+    ActiveTween = nil
+end
+
+-- ===================== Spawn / Travel ======================= --
+local function setSpawn()
+    -- tenta comando comum
+    pcall(function()
+        local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("CommF_")
+        if rem and rem:IsA("RemoteFunction") then rem:InvokeServer("SetSpawnPoint") end
+    end)
+end
+
+local function travelToSea(sea)
+    pcall(function()
+        local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("CommF_")
+        if not rem or not rem:IsA("RemoteFunction") then return end
+        if sea == 1 then rem:InvokeServer("TravelMain")
+        elseif sea == 2 then rem:InvokeServer("TravelDressrosa")
+        elseif sea == 3 then rem:InvokeServer("TravelZou") end
+    end)
+end
+
+-- =================== Player Data Helpers ==================== --
+local function getLevel()
+    -- tenta pegar LP.Data.Level.Value (com pcall)
+    local ok, v = pcall(function()
+        return LP:WaitForChild("Data", 2):WaitForChild("Level", 1).Value
+    end)
+    if ok and v then return v end
+    -- fallback se não encontrado ainda
+    return 1
+end
+
+local function getStatPoints()
+    -- tenta alguns nomes comuns para pontos de stat
+    local candidates = {"StatPoints","Points","SP","Stat_Point"}
+    for _,name in ipairs(candidates) do
+        local ok, val = pcall(function()
+            local d = LP:FindFirstChild("Data")
+            if d and d:FindFirstChild(name) then return d[name].Value end
+        end)
+        if ok and type(val) == "number" then return val end
+    end
+    return 0
+end
+
+-- ================= Weapon Selection ========================= --
+local SelectedCategory = "Melee"
+local weaponList = {
+    Melee = {"Combat","Black Leg","Electro","Dragon Claw","Superhuman","Death Step","Sharkman Karate","Electric Claw","Dragon Talon","Godhuman","Sanguine Art"},
+    Sword = {"Katana","Cutlass","Saber","Dark Blade","Rengoku","Yama","Tushita","True Triple Katana","Warden's Sword","Shisui","Saddi","Wando"},
+    Gun   = {"Slingshot","Musket","Refined Musket","Bizarre Rifle","Cannon","Kabucha","Acidum Rifle"},
+    ["Blox Fruta"] = {"Light-Light","Flame-Flame","Magma-Magma","Ice-Ice","Buddha-Buddha","Dough-Dough","Dragon-Dragon","Leopard-Leopard","Spirit-Spirit","Venom-Venom","Phoenix-Phoenix","Quake-Quake"}
+}
+
+local function equipWeapon()
+    -- tenta equipar a arma/estilo selecionado
+    local Backpack = LP:FindFirstChild("Backpack")
+    local Ch = Char()
+    if not Backpack then return end
+    local list = weaponList[SelectedCategory]
+    if list then
+        for _,name in ipairs(list) do
+            local tool = Backpack:FindFirstChild(name) or Ch:FindFirstChild(name)
+            if tool and tool:IsA("Tool") then
+                tool.Parent = Ch
+                return true
+            end
+        end
+    end
+    -- se nada achou, equipa qualquer Tool no backpack
+    for _,tool in ipairs(Backpack:GetChildren()) do
+        if tool:IsA("Tool") then tool.Parent = Ch; return true end
+    end
+end
+
+-- ====================== Quest DB ============================ --
+-- Mantive a lista completa que você forneceu (1–2550)
+local cf = CFrame.new
+local QuestDB = {
+    -- FIRST SEA
+    {min=1,   max=9,   sea=1, quest="BanditQuest1",     npc="Bandit",              qpos=cf(1060, 16, 1547),  epos={cf(1120,16,1580), cf(1080,16,1500)}},
+    {min=10,  max=14,  sea=1, quest="JungleQuest",      npc="Monkey",              qpos=cf(-1603, 36, 152),  epos={cf(-1213,12,392), cf(-1275,12,320)}},
+    {min=15,  max=29,  sea=1, quest="JungleQuest",      npc="Gorilla",             qpos=cf(-1603, 36, 152),  epos={cf(-1130,16,-526), cf(-1080,16,-570)}},
+    {min=30,  max=39,  sea=1, quest="BuggyQuest1",      npc="Pirate",              qpos=cf(-1148,4,3826),    epos={cf(-1216,5,3890), cf(-1180,6,3950)}},
+    {min=40,  max=59,  sea=1, quest="BuggyQuest1",      npc="Brute",               qpos=cf(-1148,4,3826),    epos={cf(-1254,14,4300), cf(-1300,14,4250)}},
+    {min=60,  max=74,  sea=1, quest="DesertQuest",      npc="Desert Bandit",       qpos=cf(904,7,4487),      epos={cf(957,7,4537), cf(910,7,4560)}},
+    {min=75,  max=89,  sea=1, quest="DesertQuest",      npc="Desert Officer",      qpos=cf(904,7,4487),      epos={cf(1550,15,4380), cf(1500,15,4440)}},
+    {min=90,  max=99,  sea=1, quest="SnowQuest",        npc="Snow Bandit",         qpos=cf(1389,87,-1317),   epos={cf(1350,87,-1250), cf(1410,87,-1260)}},
+    {min=100, max=119, sea=1, quest="SnowQuest",        npc="Snowman",             qpos=cf(1389,87,-1317),   epos={cf(1190,115,-1440), cf(1240,115,-1400)}},
+    {min=120, max=149, sea=1, quest="MarineQuest2",     npc="Chief Petty",         qpos=cf(-4971,20,4317),   epos={cf(-4900,20,4280), cf(-4930,20,4360)}},
+    {min=150, max=174, sea=1, quest="SkyQuest",         npc="Sky Bandit",          qpos=cf(-4986,717,-2623), epos={cf(-4940,793,-2660), cf(-5000,793,-2700)}},
+    {min=175, max=189, sea=1, quest="SkyQuest",         npc="Dark Master",         qpos=cf(-4986,717,-2623), epos={cf(-5250,840,-2270), cf(-5200,840,-2350)}},
+    {min=190, max=209, sea=1, quest="PrisonerQuest",    npc="Prisoner",            qpos=cf(4868,5,739),      epos={cf(5240,5,800), cf(5170,5,760)}},
+    {min=210, max=249, sea=1, quest="MagmaQuest",       npc="Military Soldier",    qpos=cf(-5314,11,8477),   epos={cf(-5320,13,8570), cf(-5360,13,8520)}},
+    {min=250, max=299, sea=1, quest="MagmaQuest",       npc="Military Spy",        qpos=cf(-5314,11,8477),   epos={cf(-5810,70,8780), cf(-5850,70,8720)}},
+    {min=300, max=324, sea=1, quest="FishmanQuest",     npc="Pirate",              qpos=cf(61146,19,1811),   epos={cf(61190,19,1850), cf(61240,19,1780)}},
+    {min=325, max=374, sea=1, quest="FishmanQuest",     npc="Fishman Warrior",     qpos=cf(61146,19,1811),   epos={cf(61650,45,1500), cf(61570,45,1550)}},
+    {min=375, max=399, sea=1, quest="SkyExp1Quest",     npc="God's Guard",         qpos=cf(-7864,5567,-382), epos={cf(-7720,5560,-510), cf(-7800,5560,-460)}},
+    {min=400, max=449, sea=1, quest="SkyExp1Quest",     npc="Shanda",              qpos=cf(-7864,5567,-382), epos={cf(-7680,5565,-900), cf(-7620,5565,-950)}},
+    {min=450, max=474, sea=1, quest="SkyExp2Quest",     npc="Royal Squad",         qpos=cf(-7900,5637,-1424),epos={cf(-8000,5650,-1520), cf(-7940,5650,-1480)}},
+    {min=475, max=524, sea=1, quest="SkyExp2Quest",     npc="Royal Soldier",       qpos=cf(-7900,5637,-1424),epos={cf(-8050,5665,-1290), cf(-8100,5665,-1340)}},
+    {min=525, max=624, sea=1, quest="FountainQuest",    npc="Galley Pirate",       qpos=cf(5273,38,4054),    epos={cf(5670,38,4040), cf(5610,38,4100)}},
+    {min=625, max=699, sea=1, quest="FountainQuest",    npc="Galley Captain",      qpos=cf(5273,38,4054),    epos={cf(5970,125,4890), cf(5920,125,4840)}},
+
+    -- SECOND SEA
+    {min=700, max=724, sea=2, quest="Area1Quest",       npc="Raider",              qpos=cf(-428,73,1837),    epos={cf(-530,73,1730), cf(-470,73,1760)}},
+    {min=725, max=774, sea=2, quest="Area1Quest",       npc="Mercenary",           qpos=cf(-428,73,1837),    epos={cf(-930,73,1760), cf(-880,73,1700)}},
+    {min=775, max=799, sea=2, quest="Area2Quest",       npc="Swan Pirate",         qpos=cf(634,73,918),      epos={cf(710,73,1020), cf(660,73,970)}},
+    {min=800, max=874, sea=2, quest="Area2Quest",       npc="Factory Staff",       qpos=cf(634,73,918),      epos={cf(460,73,900), cf(520,73,940)}},
+    {min=875, max=899, sea=2, quest="MarineQuest3",     npc="Marine Lieutenant",   qpos=cf(-2777,73,-742),   epos={cf(-2870,73,-820), cf(-2820,73,-770)}},
+    {min=900, max=949, sea=2, quest="MarineQuest3",     npc="Marine Captain",      qpos=cf(-2777,73,-742),   epos={cf(-3050,73,-620), cf(-2990,73,-680)}},
+    {min=950, max=974, sea=2, quest="ZombieQuest",      npc="Zombie",              qpos=cf(-5497,48,-793),   epos={cf(-5560,48,-880), cf(-5520,48,-830)}},
+    {min=975, max=999, sea=2, quest="ZombieQuest",      npc="Vampire",             qpos=cf(-5497,48,-793),   epos={cf(-5800,115,-929), cf(-5750,115,-970)}},
+    {min=1000,max=1049,sea=2, quest="SnowMountainQuest",npc="Snow Trooper",        qpos=cf(568,402,-5370),   epos={cf(640,400,-5300), cf(600,410,-5340)}},
+    {min=1050,max=1099,sea=2, quest="SnowMountainQuest",npc="Winter Warrior",      qpos=cf(568,402,-5370),   epos={cf(760,460,-5600), cf(720,460,-5560)}},
+    {min=1100,max=1124,sea=2, quest="IceSideQuest",     npc="Lab Subordinate",     qpos=cf(-6065,15,-4901),  epos={cf(-5990,15,-5000), cf(-6030,15,-4950)}},
+    {min=1125,max=1174,sea=2, quest="IceSideQuest",     npc="Horned Warrior",      qpos=cf(-6065,15,-4901),  epos={cf(-6400,20,-4700), cf(-6360,20,-4750)}},
+    {min=1175,max=1199,sea=2, quest="FireSideQuest",    npc="Magma Ninja",         qpos=cf(-5411,15,-5277),  epos={cf(-5400,15,-5400), cf(-5440,15,-5340)}},
+    {min=1200,max=1249,sea=2, quest="FireSideQuest",    npc="Lava Pirate",         qpos=cf(-5411,15,-5277),  epos={cf(-5210,25,-5550), cf(-5260,25,-5490)}},
+    {min=1250,max=1274,sea=2, quest="ShipQuest1",       npc="Ship Deckhand",       qpos=cf(1195,125,32860),  epos={cf(1210,125,32920), cf(1180,125,32960)}},
+    {min=1275,max=1299,sea=2, quest="ShipQuest1",       npc="Ship Engineer",       qpos=cf(1195,125,32860),  epos={cf(1160,125,33090), cf(1130,125,33030)}},
+    {min=1300,max=1324,sea=2, quest="ShipQuest2",       npc="Ship Steward",        qpos=cf(968,125,33090),   epos={cf(980,125,33200), cf(960,125,33140)}},
+    {min=1325,max=1349,sea=2, quest="ShipQuest2",       npc="Ship Officer",        qpos=cf(968,125,33090),   epos={cf(940,125,33150), cf(900,125,33210)}},
+    {min=1350,max=1374,sea=2, quest="FrostQuest",       npc="Arctic Warrior",      qpos=cf(6048,29,-6201),   epos={cf(6100,29,-6250), cf(6060,29,-6180)}},
+    {min=1375,max=1424,sea=2, quest="FrostQuest",       npc="Snow Lurker",         qpos=cf(6048,29,-6201),   epos={cf(5950,35,-6400), cf(6000,35,-6360)}},
+    {min=1425,max=1449,sea=2, quest="ForgottenQuest",   npc="Sea Soldier",         qpos=cf(-3051,238,-10238),epos={cf(-3000,238,-10300), cf(-3070,238,-10200)}},
+    {min=1450,max=1499,sea=2, quest="ForgottenQuest",   npc="Water Fighter",       qpos=cf(-3051,238,-10238),epos={cf(-3100,238,-10100), cf(-3020,238,-10160)}},
+
+    -- THIRD SEA
+    {min=1500,max=1524,sea=3, quest="PiratePortQuest",  npc="Pirate Millionaire",  qpos=cf(-288,44,5578),    epos={cf(-340,44,5680), cf(-300,44,5620)}},
+    {min=1525,max=1574,sea=3, quest="PiratePortQuest",  npc="Pistol Billionaire",  qpos=cf(-288,44,5578),    epos={cf(-430,44,5800), cf(-380,44,5740)}},
+    {min=1575,max=1599,sea=3, quest="AmazonQuest",      npc="Female Islander",     qpos=cf(5748,199,129),    epos={cf(5660,199,210), cf(5700,199,160)}},
+    {min=1600,max=1624,sea=3, quest="AmazonQuest",      npc="Giant Islander",      qpos=cf(5748,199,129),    epos={cf(5600,220,40),  cf(5640,220,80)}},
+    {min=1625,max=1649,sea=3, quest="MarineTreeIsland", npc="Marine Commodore",    qpos=cf(2273,146,-4357),  epos={cf(2200,146,-4410), cf(2250,146,-4380)}},
+    {min=1650,max=1699,sea=3, quest="MarineTreeIsland", npc="Marine Rear Admiral", qpos=cf(2273,146,-4357),  epos={cf(2360,146,-4500), cf(2320,146,-4460)}},
+    {min=1700,max=1724,sea=3, quest="DeepForestIsland", npc="Forest Pirate",       qpos=cf(-1245,80,-10780), epos={cf(-1180,80,-10700), cf(-1210,80,-10740)}},
+    {min=1725,max=1774,sea=3, quest="DeepForestIsland", npc="Mythological Pirate", qpos=cf(-1245,80,-10780), epos={cf(-1400,90,-10870), cf(-1360,90,-10820)}},
+    {min=1775,max=1799,sea=3, quest="DeepForestIsland2",npc="Jungle Pirate",       qpos=cf(-1337,430,-9486), epos={cf(-1260,430,-9560), cf(-1300,430,-9520)}},
+    {min=1800,max=1824,sea=3, quest="DeepForestIsland2",npc="Musketeer Pirate",    qpos=cf(-1337,430,-9486), epos={cf(-1420,430,-9400), cf(-1380,430,-9440)}},
+    {min=1825,max=1849,sea=3, quest="PineappleTownQuest",npc="Peanut Scout",       qpos=cf(-2132,72,-10177), epos={cf(-2060,72,-10230), cf(-2100,72,-10190)}},
+    {min=1850,max=1899,sea=3, quest="PineappleTownQuest",npc="Peanut President",   qpos=cf(-2132,72,-10177), epos={cf(-1960,84,-10120), cf(-2000,84,-10160)}},
+    {min=1900,max=1924,sea=3, quest="IceCreamIslandQuest",npc="Ice Cream Chef",    qpos=cf(-821,73,-10920),  epos={cf(-900,73,-10860), cf(-860,73,-10900)}},
+    {min=1925,max=1974,sea=3, quest="IceCreamIslandQuest",npc="Ice Cream Commander",qpos=cf(-821,73,-10920), epos={cf(-720,95,-11000), cf(-760,95,-10960)}},
+    {min=1975,max=1999,sea=3, quest="CakeQuest1",       npc="Cookie Crafters",     qpos=cf(-2021,36,-12027), epos={cf(-2100,36,-11960), cf(-2060,36,-12000)}},
+    {min=2000,max=2049,sea=3, quest="CakeQuest1",       npc="Cake Guard",          qpos=cf(-1960,36,-12130), epos={cf(-2000,36,-12090)}},
+    {min=2050,max=2074,sea=3, quest="CakeQuest2",       npc="Baking Staff",        qpos=cf(-1877,36,-12771), epos={cf(-1935,36,-12820), cf(-1890,36,-12740)}},
+    {min=2075,max=2099,sea=3, quest="CakeQuest2",       npc="Head Baker",          qpos=cf(-1877,36,-12771), epos={cf(-1800,36,-12900), cf(-1840,36,-12860)}},
+    {min=2100,max=2124,sea=3, quest="ChocoIslandQuest", npc="Cocoa Warrior",       qpos=cf(-1123,72,-14365), epos={cf(-1180,72,-14380), cf(-1140,72,-14340)}},
+    {min=2125,max=2149,sea=3, quest="ChocoIslandQuest", npc="Chocolate Bar",       qpos=cf(-1123,72,-14365), epos={cf(-1050,72,-14450), cf(-1090,72,-14410)}},
+    {min=2150,max=2199,sea=3, quest="CandyQuest1",      npc="Candy Rebel",         qpos=cf(-990,88,-15180),  epos={cf(-1030,88,-15260), cf(-990,88,-15120)}},
+    {min=2200,max=2249,sea=3, quest="CandyQuest1",      npc="Candy Pirate",        qpos=cf(-990,88,-15180),  epos={cf(-920,88,-15050),  cf(-960,88,-15100)}},
+    {min=2250,max=2299,sea=3, quest="CandyQuest2",      npc="Snow Demon",          qpos=cf(-820,110,-15560), epos={cf(-860,110,-15630), cf(-830,110,-15590)}},
+    {min=2300,max=2349,sea=3, quest="CandyQuest2",      npc="Isle Champion",       qpos=cf(-820,110,-15560), epos={cf(-780,110,-15480), cf(-800,110,-15520)}},
+    {min=2350,max=2399,sea=3, quest="TikiQuest1",       npc="Pineapple Hunter",    qpos=cf(-360,85,-16010),  epos={cf(-420,85,-16080), cf(-380,85,-16040)}},
+    {min=2400,max=2449,sea=3, quest="TikiQuest1",       npc="Banana Warrior",      qpos=cf(-360,85,-16010),  epos={cf(-300,85,-15940), cf(-340,85,-15990)}},
+    {min=2450,max=2499,sea=3, quest="TikiQuest2",       npc="Coconut Captain",     qpos=cf(-220,95,-16350),  epos={cf(-260,95,-16420), cf(-230,95,-16380)}},
+    {min=2500,max=2550,sea=3, quest="TikiQuest2",       npc="Palm Enforcer",       qpos=cf(-220,95,-16350),  epos={cf(-190,95,-16260), cf(-210,95,-16310)}},
+}
+
+-- =================== Busca de inimigos ====================== --
+-- Procura NPC pelo nome parcial, priorizando Workspace.Enemies quando existir
+local EnemiesFolder = Workspace:FindFirstChild("Enemies")
+local function validEnemyModel(m)
+    if not m or not m:IsA("Model") then return false end
+    local h = m:FindFirstChild("Humanoid")
+    local r = m:FindFirstChild("HumanoidRootPart")
+    return h and r and h.Health and h.Health > 0
+end
+
+local function findEnemyByNamePart(namePart)
+    if not namePart then return nil end
+    local lower = string.lower(namePart)
+    local container = EnemiesFolder or Workspace
+    -- primeiro tenta container direto
+    for _,mob in ipairs(container:GetChildren()) do
+        if validEnemyModel(mob) and string.find(string.lower(mob.Name), lower) then
+            return mob
+        end
+    end
+    -- fallback: procura por todo Workspace (descendentes)
+    for _,mob in ipairs(Workspace:GetDescendants()) do
+        if mob:IsA("Model") and validEnemyModel(mob) and string.find(string.lower(mob.Name), lower) then
+            return mob
+        end
+    end
+    return nil
+end
+
+-- ================= Hitbox + FastAttack ====================== --
+local HitboxSize = 70
+local function applyBigHitbox(target)
+    if not target then return end
+    local hrp = target:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    pcall(function()
+        hrp.CanCollide = false
+        hrp.Size = Vector3.new(HitboxSize, HitboxSize, HitboxSize)
+        hrp.Massless = true
+    end)
+end
+
+local FastAttackActive = false
+-- Aumenta velocidade de animações do humano do player para "fast attack"
+local function fastAttackTick()
+    if not FastAttackActive then return end
+    local hum = Hum()
+    pcall(function()
+        if hum and hum:FindFirstChild("Animator") then
+            for _,track in ipairs(hum.Animator:GetPlayingAnimationTracks()) do
+                if track and track.IsPlaying then track:AdjustSpeed(1.2) end
+            end
+        end
+    end)
+end
+
+-- =================== AUTO CLICK (estilo app) ================ --
+-- Modos: "Fixed", "Center", "OnTarget"
+local AC = {
+    Enabled = false,
+    CPS = 12,
+    Mode = "Fixed",
+    X = 640, Y = 360, -- coordenada fixa default (1280x720 center-ish)
+    Hotkey = Enum.KeyCode.F6,
+    CurrentTarget = nil,
+}
+
+local function screenClick(x, y)
+    if not x or not y then return end
+    pcall(function()
+        Vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        Vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+end
+
+local function getCenter()
+    local v = Cam.ViewportSize
+    return math.floor(v.X/2), math.floor(v.Y/2)
+end
+
+local function getTargetScreenXY()
+    local tgt = AC.CurrentTarget
+    if not (tgt and tgt.Parent) then return nil end
+    local hrp = tgt:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    local v3, onscreen = Cam:WorldToViewportPoint(hrp.Position)
+    if not onscreen then return nil end
+    return math.floor(v3.X), math.floor(v3.Y)
+end
+
+-- Motor do autoclick: roda numa thread separada
+stopThread("autoclick")
+threads.autoclick = task.spawn(function()
+    while true do
+        if AC.Enabled then
+            local x, y
+            if AC.Mode == "Center" then
+                x, y = getCenter()
+            elseif AC.Mode == "OnTarget" then
+                x, y = getTargetScreenXY()
+                if not x then x, y = getCenter() end
+            else
+                x, y = AC.X, AC.Y
+            end
+
+            screenClick(x, y)
+
+            -- fallback: ativa tool e VirtualUser button para algumas armas funcionarem
+            pcall(function()
+                local tool = Char():FindFirstChildOfClass("Tool")
+                if tool then tool:Activate() end
+            end)
+            pcall(function()
+                VirtualUser:CaptureController()
+                VirtualUser:Button1Down(Vector2.new(0,0))
+                task.wait(0.01)
+                VirtualUser:Button1Up(Vector2.new(0,0))
+            end)
+
+            task.wait(math.clamp(1 / math.max(1, AC.CPS), 0.015, 0.35))
+        else
+            task.wait(0.08)
+        end
+    end
+end)
+
+-- Hotkey para ativar/desativar Auto Click (F6 por padrão)
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == AC.Hotkey then
+        AC.Enabled = not AC.Enabled
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification",{
+                Title="Auto Click",
+                Text = AC.Enabled and "Ligado" or "Desligado",
+                Duration = 2
+            })
+        end)
+    end
+end)
+
+-- ================= Hover / Combate ========================= --
+local HoverEnabled, HoverHeight = true, 18
+
+-- ======================= Farm Core ========================= --
+local AutoFarmEnabled, stopFarmSignal = false, false
+
+-- Pega a quest (vai para a ilha, faz tween até NPC do quest giver e tenta StartQuest)
+local function takeQuest(q)
+    if not q then return end
+    travelToSea(q.sea)
+    if q.qpos then
+        pcall(function() tweenTo(q.qpos) end)
+    end
+    setSpawn()
+    task.wait(0.15)
+    pcall(function()
+        local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("CommF_")
+        if rem and rem:IsA("RemoteFunction") then
+            rem:InvokeServer("StartQuest", q.quest, 1)
+        else
+            -- tenta outros padrões se CommF_ não existir
+            safeInvokeRemotes("Remotes.CommF_.StartQuest", q.quest, 1)
+        end
+    end)
+end
+
+-- Função de hunt: aproxima do NPC, aplica hitbox, fica em hover e ativa fast attack
+local function hunt(q)
+    equipWeapon()
+    local target = findEnemyByNamePart(q.npc)
+    if not target then
+        -- se não encontra NPC no spawn, teleporta para epos[1] (área geral) e tenta novamente
+        if q.epos and #q.epos > 0 then
+            pcall(function() tweenTo(q.epos[1]) end)
+        end
+        return
+    end
+
+    local r2 = target:FindFirstChild("HumanoidRootPart")
+    local h2 = target:FindFirstChild("Humanoid")
+    if not (r2 and h2) then return end
+
+    applyBigHitbox(target)
+    AC.CurrentTarget = target
+
+    local above = r2.CFrame * CFrame.new(0, HoverHeight, 0)
+    pcall(function() tweenTo(above) end)
+
+    -- Loop de combate: mantém player sobre o NPC, aplica hitbox e ativa fast attack
+    repeat
+        if stopFarmSignal then break end
+        if HoverEnabled then
+            pcall(function() HRP().CFrame = r2.CFrame * CFrame.new(0, HoverHeight, 0) end)
+        else
+            pcall(function() HRP().CFrame = r2.CFrame * CFrame.new(0,0,3) end)
+        end
+
+        applyBigHitbox(target)
+        FastAttackActive = true
+        fastAttackTick()
+
+        RunService.Heartbeat:Wait()
+    until (not h2) or (h2.Health <= 0) or not target.Parent or not AutoFarmEnabled
+
+    FastAttackActive = false
+    AC.CurrentTarget = nil
+end
+
+-- Pesquisa na QuestDB a quest adequada para o level; retorna a PRIMEIRA que encaixa
+local function questForLevel(lvl)
+    for _,q in ipairs(QuestDB) do
+        if lvl >= q.min and (not q.max or lvl <= q.max) then
+            return q
+        end
+    end
+    return nil
+end
+
+-- Loop principal de farm: pega quest se necessário e ai faz hunt
+local function farmLoop()
+    stopFarmSignal = false
+    while AutoFarmEnabled and not stopFarmSignal do
+        local lvl = getLevel()
+        local q = questForLevel(lvl)
+        if not q then
+            task.wait(0.25)
+            RunService.Heartbeat:Wait()
+            continue
+        end
+
+        -- Garante estar na ilha correta e tenta pegar quest
+        travelToSea(q.sea)
+        -- Verifica se já tem quest ativa (procura GUI Quest visível)
+        local hasQuest = false
+        pcall(function()
+            if LP.PlayerGui and LP.PlayerGui.Main and LP.PlayerGui.Main:FindFirstChild("Quest") then
+                hasQuest = LP.PlayerGui.Main.Quest.Visible
+            end
+        end)
+
+        if not hasQuest then
+            takeQuest(q)
+            task.wait(0.9)
+        end
+
+        -- tenta farm do mob
+        hunt(q)
+        RunService.Heartbeat:Wait()
+    end
+end
+
+-- ======================= AUTO STATS ========================= --
+local AutoStats = {
+    Enabled = false,
+    Mode = "Melee", -- "Melee","Sword","Gun","Blox Fruta"
+    Delay = 0.35,   -- tempo entre tentativas de adicionar pontos
+}
+
+-- Tenta enviar pontos usando remotes comuns; adapta variáveis conforme o nome do stat
+local function tryAddStat(stat)
+    -- stat strings em Blox Fruits costumam ser "Melee", "Sword", "Gun", "Fruit"
+    -- tenta várias keys de remotes com pcall para não quebrar se ausente
+    local tries = {
+        function() local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("AddPoint"); if rem and rem:IsA("RemoteFunction") then rem:InvokeServer(stat) end end,
+        function() local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("AddStat"); if rem and rem:IsA("RemoteFunction") then rem:InvokeServer(stat) end end,
+        function() local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("BuyStat"); if rem and rem:IsA("RemoteFunction") then rem:InvokeServer(stat) end end,
+        function() local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("BuyStats"); if rem and rem:IsA("RemoteFunction") then rem:InvokeServer(stat) end end,
+    }
+    for _,fn in ipairs(tries) do pcall(fn) end
+end
+
+-- Thread que roda o AutoStats enquanto ativado
+local function startAutoStats()
+    stopThread("autostats")
+    threads.autostats = task.spawn(function()
+        while AutoStats.Enabled do
+            local pts = getStatPoints()
+            if pts <= 0 then
+                task.wait(1)
+            else
+                local statName
+                if AutoStats.Mode == "Melee" then statName = "Melee"
+                elseif AutoStats.Mode == "Sword" then statName = "Sword"
+                elseif AutoStats.Mode == "Gun" then statName = "Gun"
+                else statName = "Fruit" end
+
+                -- Enquanto tiver pontos, tenta aplicar
+                while getStatPoints() > 0 and AutoStats.Enabled do
+                    tryAddStat(statName)
+                    task.wait(AutoStats.Delay)
+                end
+            end
+            task.wait(0.5)
+        end
+    end)
+end
+
+-- ============================ UI ============================ --
+-- fallback UI simples (caso Fluent não carregue)
+local function buildFallbackUI()
+    local scr = Instance.new("ScreenGui")
+    scr.Name = "araujo7xp_fallback"
+    scr.Parent = game:GetService("CoreGui")
+
+    local frame = Instance.new("Frame", scr)
+    frame.Size = UDim2.new(0, 360, 0, 420)
+    frame.Position = UDim2.new(0, 30, 0, 80)
+    frame.BackgroundTransparency = 0.1
+    frame.BackgroundColor3 = Color3.fromRGB(20,20,20)
+    frame.BorderSizePixel = 0
+
+    local title = Instance.new("TextLabel", frame)
+    title.Size = UDim2.new(1, -10, 0, 30)
+    title.Position = UDim2.new(0,5,0,5)
+    title.Text = "araujo7xp - Fallback"
+    title.TextColor3 = Color3.fromRGB(255,255,255)
+    title.BackgroundTransparency = 1
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Font = Enum.Font.SourceSansBold
+    title.TextSize = 18
+
+    local y = 45
+    local function addButton(txt, cb)
+        local b = Instance.new("TextButton", frame)
+        b.Size = UDim2.new(1, -10, 0, 30)
+        b.Position = UDim2.new(0,5,0,y); y = y + 36
+        b.Text = txt
+        b.BackgroundColor3 = Color3.fromRGB(40,40,40)
+        b.TextColor3 = Color3.fromRGB(255,255,255)
+        b.MouseButton1Click:Connect(function()
+            pcall(cb)
+        end)
+    end
+
+    addButton("Auto Farm: OFF", function()
+        AutoFarmEnabled = not AutoFarmEnabled
+        if AutoFarmEnabled then
+            stopThread("farm")
+            threads.farm = task.spawn(farmLoop)
+        else
+            stopFarmSignal = true; FastAttackActive=false; AC.CurrentTarget=nil
+            clearConnections(); stopTween()
+        end
+    end)
+
+    addButton("Auto Click: OFF (F6)", function()
+        AC.Enabled = not AC.Enabled
+    end)
+
+    addButton("Auto Stats: OFF", function()
+        AutoStats.Enabled = not AutoStats.Enabled
+        if AutoStats.Enabled then startAutoStats() else stopThread("autostats") end
+    end)
+
+    addButton("Set Spawn", function() setSpawn() end)
+    addButton("Force NoFog", function() forceNoFog() end)
+
+    local info = Instance.new("TextLabel", frame)
+    info.Size = UDim2.new(1, -10, 0, 80)
+    info.Position = UDim2.new(0,5,0,y+4)
+    info.Text = "Config: Hover("..tostring(HoverEnabled)..") Height:"..tostring(HoverHeight).." | Hitbox:"..tostring(HitboxSize).." | TweenSPS:"..tostring(TweenSPS)
+    info.TextWrapped = true
+    info.TextColor3 = Color3.fromRGB(200,200,200)
+    info.BackgroundTransparency = 1
+end
+
+-- Tenta carregar Fluent (raw repo), se der certo monta UI completa
+local okFluent, Fluent = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/source.lua"))()
+end)
+local okIM, InterfaceManager = pcall(function()
+    return loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+end)
+
+if okFluent and Fluent and okIM and InterfaceManager then
+    -- Janela principal Fluent
+    local Window = Fluent:CreateWindow({
+        Title = "araujo7xp",
+        SubTitle = "Blox Fruits Hub",
+        TabWidth = 180,
+        Size = UDim2.fromOffset(720, 520),
+        Acrylic = true,
+        Theme = "Dark",
+        MinimizeKey = Enum.KeyCode.LeftControl
+    })
+
+    -- ================ Aba Auto Farm ==================
+    local farmTab = Window:AddTab({ Title = "Auto Farm", Icon = "swords" })
+
+    farmTab:AddDropdown("weaponCat", {
+        Title = "Arma para usar",
+        Values = {"Melee","Sword","Gun","Blox Fruta"},
+        Default = 1,
+        Callback = function(v) SelectedCategory = v end
+    })
+
+    farmTab:AddToggle("autoFarmToggle", {
+        Title = "Ativar Auto Farm Level (com Fast Attack)",
+        Default = false,
+        Callback = function(state)
+            AutoFarmEnabled = state
+            if state then
+                stopThread("farm")
+                threads.farm = task.spawn(farmLoop)
+                bindHeartbeat(function()
+                    if AutoFarmEnabled and FastAttackActive then fastAttackTick() end
+                end)
+            else
+                stopFarmSignal = true
+                FastAttackActive = false
+                AC.CurrentTarget = nil
+                clearConnections(); stopTween()
+            end
+        end
+    })
+
+    farmTab:AddToggle("hoverToggle", {
+        Title = "Voar sobre o NPC (Hover)",
+        Default = HoverEnabled,
+        Callback = function(v) HoverEnabled = v end
+    })
+
+    farmTab:AddSlider("hoverHeight", {
+        Title = "Altura do Hover",
+        Default = HoverHeight, Min = 8, Max = 60, Rounding = 0,
+        Callback = function(v) HoverHeight = v end
+    })
+
+    farmTab:AddSlider("tweenSps", {
+        Title = "Velocidade do Tween (studs/s)",
+        Default = TweenSPS, Min = 40, Max = 400, Rounding = 0,
+        Callback = function(v) TweenSPS = v end
+    })
+
+    farmTab:AddSlider("hitboxSize", {
+        Title = "Tamanho da Hitbox (HRP do NPC)",
+        Default = HitboxSize, Min = 20, Max = 220, Rounding = 0,
+        Callback = function(v) HitboxSize = v end
+    })
+
+    farmTab:AddButton({ Title = "Set Spawn", Callback = setSpawn })
+    farmTab:AddButton({ Title = "Force NoFog", Callback = forceNoFog })
+
+    -- ================ Aba Auto Click ==================
+    local acTab = Window:AddTab({ Title = "Auto Click", Icon = "mouse-pointer" })
+
+    acTab:AddToggle("acEnabled", {
+        Title = "Auto Click (Global)  [Hotkey F6]",
+        Default = AC.Enabled,
+        Callback = function(v) AC.Enabled = v end
+    })
+
+    acTab:AddDropdown("acMode", {
+        Title = "Modo do Auto Click",
+        Values = {"Coordenada Fixa","Centro da Tela","No Alvo"},
+        Default = 1,
+        Callback = function(v)
+            if v == "Coordenada Fixa" then AC.Mode = "Fixed"
+            elseif v == "Centro da Tela" then AC.Mode = "Center"
+            else AC.Mode = "OnTarget" end
+        end
+    })
+
+    acTab:AddSlider("acCps", {
+        Title = "CPS (Cliques por segundo)",
+        Default = AC.CPS, Min = 1, Max = 60, Rounding = 0,
+        Callback = function(v) AC.CPS = v end
+    })
+
+    acTab:AddSlider("acX", {
+        Title = "X (pixels) - Coordenada Fixa",
+        Default = AC.X, Min = 0, Max = 4000, Rounding = 0,
+        Callback = function(v) AC.X = v end
+    })
+    acTab:AddSlider("acY", {
+        Title = "Y (pixels) - Coordenada Fixa",
+        Default = AC.Y, Min = 0, Max = 3000, Rounding = 0,
+        Callback = function(v) AC.Y = v end
+    })
+
+    -- ================ Aba Auto Stats ==================
+    local statsTab = Window:AddTab({ Title = "Auto Stats", Icon = "chart-bar" })
+    statsTab:AddDropdown("statMode", {
+        Title = "Estatística a aplicar",
+        Values = {"Melee","Sword","Gun","Blox Fruta"},
+        Default = 1,
+        Callback = function(v) AutoStats.Mode = v end
+    })
+    statsTab:AddSlider("statDelay", {
+        Title = "Delay entre pontos (s)",
+        Default = AutoStats.Delay, Min = 0.05, Max = 2.0, Rounding = 2,
+        Callback = function(v) AutoStats.Delay = v end
+    })
+    statsTab:AddToggle("statEnabled", {
+        Title = "Ativar Auto Stats",
+        Default = AutoStats.Enabled,
+        Callback = function(v)
+            AutoStats.Enabled = v
+            if v then startAutoStats() else stopThread("autostats") end
+        end
+    })
+    statsTab:AddButton({ Title = "Set Spawn (try reset?)", Callback = setSpawn })
+
+    -- ================ Aba Loja / Util ==================
+    local shopTab = Window:AddTab({ Title = "Loja / Util", Icon = "shopping-cart" })
+    shopTab:AddButton({ Title = "Ir para First Sea", Callback = function() travelToSea(1) end })
+    shopTab:AddButton({ Title = "Ir para Second Sea", Callback = function() travelToSea(2) end })
+    shopTab:AddButton({ Title = "Ir para Third Sea", Callback = function() travelToSea(3) end })
+
+    shopTab:AddParagraph({ Title = "Resgatar Códigos", Content = "Tenta vários códigos populares." })
+    local Codes = {
+        "ADMIN_TROLL","kittgaming","Sub2Fer999","Enyu_is_Pro","Magicbus","JCWK",
+        "Starcodeheo","Bluxxy","fudd10_v2","FUDD10","BIGNEWS","THEGREATACE",
+        "SUB2GAMERROBOT_EXP1","Sub2OfficialNoobie","StrawHatMaine","SUB2NOOBMASTER123",
+        "Sub2UncleKizaru","Axiore","TantaiGaming"
+    }
+    local function RedeemAllCodes()
+        for _, code in ipairs(Codes) do
+            pcall(function()
+                local rem = ReplicatedStorage:FindFirstChild("Remotes") and ReplicatedStorage.Remotes:FindFirstChild("Redeem")
+                if rem and rem:IsA("RemoteFunction") then rem:InvokeServer(code) end
+            end)
+        end
+        Fluent:Notify({ Title = "Códigos", Content = "Tentadas todas os códigos.", Duration = 4 })
+    end
+    shopTab:AddButton({ Title = "Resgatar todos os códigos", Callback = RedeemAllCodes })
+
+    -- ================ UI Settings (InterfaceManager) ========
+    local SettingsTab = Window:AddTab({ Title = "UI Settings", Icon = "settings" })
+    InterfaceManager:SetLibrary(Fluent)
+    InterfaceManager:SetFolder("araujo7xpHub")
+    InterfaceManager:BuildInterfaceSection(SettingsTab)
+
+    Window:SelectTab(1)
+    Fluent:Notify({
+        Title = "araujo7xp",
+        Content = "UI carregada. Teste em conta secundária e servidor privado.",
+        Duration = 6
+    })
+else
+    -- se Fluent não carregou, usa fallback
+    buildFallbackUI()
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("SendNotification",{
+            Title="araujo7xp",
+            Text="Fluent não carregou. Usando UI simples.",
+            Duration=5
+        })
+    end)
+end
+
+-- ========================= FIM ============================== --
+-- O script está completo. Se algo falhar (remotes com nomes diferentes),
+-- me manda os nomes que aparecem em ReplicatedStorage.Remotes e eu atualizo
+-- as chamadas para serem 100% compatíveis com seu servidor/version.
+--============================================================--
